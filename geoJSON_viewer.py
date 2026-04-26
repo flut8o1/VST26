@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 import contextily as cx
 import xyzservices.providers as xyz
+from shapely.geometry import Point
 
 
 WGS84 = "EPSG:4326"
@@ -205,16 +206,22 @@ def create_geojson_png_map(
     show_map=True,
     satellite_background=True,
     basemap_zoom=13,
+    fixed_png_extent=False,
+    png_center_lat=48.137154,
+    png_center_lon=11.576124,
+    png_square_side_km=25,
 ):
     """
     Erstellt eine statische PNG-Karte mit optionalem Satellitenhintergrund.
 
-    satellite_background=True:
-        Fügt ein Satellitenbild als Hintergrund hinzu.
+    Wenn fixed_png_extent=True:
+        Es wird nur ein festes Quadrat um den angegebenen Mittelpunkt gezeigt.
 
-    basemap_zoom:
-        Zoomstufe der Hintergrundkacheln.
-        Höher = detaillierter, aber langsamer.
+    png_center_lat / png_center_lon:
+        Mittelpunkt des Quadrats in WGS84.
+
+    png_square_side_km:
+        Seitenlänge des Quadrats in Kilometern.
     """
 
     input_path = Path(input_geojson)
@@ -239,7 +246,21 @@ def create_geojson_png_map(
     # Für Satelliten-/Webkarten muss nach EPSG:3857 umgerechnet werden
     gdf_plot = gdf.to_crs(WEB_MERCATOR)
 
-    minx, miny, maxx, maxy = gdf_plot.total_bounds
+    # Ausschnitt bestimmen
+    if fixed_png_extent:
+        center_point = gpd.GeoSeries(
+            [Point(png_center_lon, png_center_lat)],
+            crs=WGS84
+        ).to_crs(WEB_MERCATOR).iloc[0]
+
+        half_side_m = (png_square_side_km * 1000) / 2
+
+        minx = center_point.x - half_side_m
+        maxx = center_point.x + half_side_m
+        miny = center_point.y - half_side_m
+        maxy = center_point.y + half_side_m
+    else:
+        minx, miny, maxx, maxy = gdf_plot.total_bounds
 
     fig, ax = plt.subplots(figsize=(14, 14))
 
@@ -256,7 +277,7 @@ def create_geojson_png_map(
 
     legend_items = []
 
-    # LuftVO-Zonen über den Satellitenhintergrund legen
+    # LuftVO-Zonen darüber legen
     for luftvo_type in sorted(gdf_plot["luftvo_type"].dropna().unique()):
         subset = gdf_plot[gdf_plot["luftvo_type"] == luftvo_type]
 
@@ -281,11 +302,18 @@ def create_geojson_png_map(
             )
         )
 
-    # Ausschnitt nach dem Plotten nochmal fixieren
+    # Ausschnitt nach dem Plotten nochmals fixieren
     ax.set_xlim(minx, maxx)
     ax.set_ylim(miny, maxy)
 
-    ax.set_title("LuftVO-Geozonen mit Satellitenhintergrund", fontsize=16)
+    if fixed_png_extent:
+        ax.set_title(
+            f"LuftVO-Geozonen – 25 km Quadrat um München Stadtmitte",
+            fontsize=16
+        )
+    else:
+        ax.set_title("LuftVO-Geozonen mit Satellitenhintergrund", fontsize=16)
+
     ax.set_axis_off()
     ax.set_aspect("equal")
 
@@ -319,6 +347,10 @@ def create_geojson_visualization(
     show_png=True,
     satellite_background=True,
     basemap_zoom=13,
+    fixed_png_extent=False,
+    png_center_lat=48.137154,
+    png_center_lon=11.576124,
+    png_square_side_km=25,
 ):
     """
     Zentrale Visualisierungsfunktion.
@@ -343,6 +375,10 @@ def create_geojson_visualization(
             show_map=show_png,
             satellite_background=satellite_background,
             basemap_zoom=basemap_zoom,
+            fixed_png_extent=fixed_png_extent,
+            png_center_lat=png_center_lat,
+            png_center_lon=png_center_lon,
+            png_square_side_km=png_square_side_km,
         )
 
     raise ValueError("output_format muss 'html' oder 'png' sein.")
@@ -368,6 +404,10 @@ def main():
         show_png=True,
         satellite_background=True,
         basemap_zoom=13,
+        fixed_png_extent=True,
+        png_center_lat=48.137154,
+        png_center_lon=11.576124,
+        png_square_side_km=25,
     )
 
     print(f"Karte wurde erstellt: {result_file}")
