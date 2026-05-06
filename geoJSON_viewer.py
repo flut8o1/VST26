@@ -1,148 +1,131 @@
-from pathlib import Path
+"""
+geoJSON_viewer.py – Visualisierung der LuftVO-Zonenflächen.
+
+Stellt die gepufferten Sperrzonen als interaktive HTML-Karte (Folium)
+oder als statische PNG-Karte (Matplotlib + optionaler Satellitenhintergrund) dar.
+
+Die zentrale Einstiegsfunktion ist create_geojson_visualization(),
+die je nach output_format an die passende Implementierung delegiert.
+"""
+
 import webbrowser
 
-import geopandas as gpd
 import folium
-import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
-import contextily as cx
-import xyzservices.providers as xyz
-from shapely.geometry import Point
+
+from utils import (
+    WGS84, WEB_MERCATOR,
+    read_geojson, get_fixed_extent_web_mercator,
+    setup_map_figure, save_map_figure,
+)
 
 
-WGS84 = "EPSG:4326"
-WEB_MERCATOR = "EPSG:3857"
+# =============================================================================
+# Farb- und Bezeichnungs-Lookup nach LuftVO-Typ
+# =============================================================================
 
-
+# Farben für die Zonendarstellung – einheitlich für HTML- und PNG-Karten.
 COLOR_BY_TYPE = {
-    "hospital": "#e53935",
-    "police": "#1e88e5",
-    "prison": "#6d4c41",
-    "diplomatic": "#3949ab",
+    "hospital":               "#e53935",
+    "police":                 "#1e88e5",
+    "prison":                 "#6d4c41",
+    "diplomatic":             "#3949ab",
     "government_or_security": "#fb8c00",
-    "military": "#4e342e",
-    "industrial": "#757575",
-    "power_plant": "#fdd835",
-    "airport": "#8e24aa",
-    "aerodrome": "#ab47bc",
-    "airstrip_or_heliport": "#26a69a",
-    "nature_protection": "#43a047",
-    "landscape_protection": "#7cb342",
+    "military":               "#4e342e",
+    "industrial":             "#757575",
+    "power_plant":            "#fdd835",
+    "airport":                "#8e24aa",
+    "aerodrome":              "#ab47bc",
+    "airstrip_or_heliport":   "#26a69a",
+    "nature_protection":      "#43a047",
+    "landscape_protection":   "#7cb342",
 }
 
-
+# Deutsche Bezeichnungen für Legende und Tooltips.
 LABEL_BY_TYPE = {
-    "hospital": "Krankenhaus",
-    "police": "Polizei",
-    "prison": "Gefängnis",
-    "diplomatic": "Diplomatisch",
+    "hospital":               "Krankenhaus",
+    "police":                 "Polizei",
+    "prison":                 "Gefängnis",
+    "diplomatic":             "Diplomatisch",
     "government_or_security": "Behörde / Sicherheit",
-    "military": "Militär",
-    "industrial": "Industrie",
-    "power_plant": "Energieanlage",
-    "airport": "Flughafen",
-    "aerodrome": "Flugplatz",
-    "airstrip_or_heliport": "Heliport / Airstrip",
-    "nature_protection": "Naturschutz",
-    "landscape_protection": "Landschaftsschutz",
+    "military":               "Militär",
+    "industrial":             "Industrie",
+    "power_plant":            "Energieanlage",
+    "airport":                "Flughafen",
+    "aerodrome":              "Flugplatz",
+    "airstrip_or_heliport":   "Heliport / Airstrip",
+    "nature_protection":      "Naturschutz",
+    "landscape_protection":   "Landschaftsschutz",
 }
 
+
+# =============================================================================
+# HTML-Karte (Folium)
+# =============================================================================
 
 def _style_feature(feature):
     """
-    Styling für die HTML-Karte mit Folium.
+    Bestimmt das Folium-Styling für ein einzelnes GeoJSON-Feature.
+
+    Schutzgebiete (radius = 0) werden etwas transparenter dargestellt,
+    da sie die originale Fläche ohne zusätzlichen Puffer zeigen.
     """
-
-    props = feature.get("properties", {})
+    props      = feature.get("properties", {})
     luftvo_type = props.get("luftvo_type", "")
-    radius = props.get("luftvo_radius_m", 0)
-
-    color = COLOR_BY_TYPE.get(luftvo_type, "#1976d2")
-
-    if radius == 0:
-        fill_opacity = 0.25
-    else:
-        fill_opacity = 0.35
+    radius     = props.get("luftvo_radius_m", 0)
+    color      = COLOR_BY_TYPE.get(luftvo_type, "#1976d2")
 
     return {
-        "fillColor": color,
-        "color": color,
-        "weight": 2,
-        "fillOpacity": fill_opacity,
+        "fillColor":   color,
+        "color":       color,
+        "weight":      2,
+        # Schutzgebiete (radius=0) etwas transparenter, da Originalfläche ohne Puffer.
+        "fillOpacity": 0.25 if radius == 0 else 0.35,
     }
 
 
-def create_geojson_html_map(
-    input_geojson,
-    output_html="drohnen_luftvo_karte.html",
-    *,
-    open_in_browser=True,
-):
+def create_geojson_html_map(input_geojson, output_html="drohnen_luftvo_karte.html", *, open_in_browser=True):
     """
-    Erstellt eine interaktive HTML-Karte mit Folium.
+    Erstellt eine interaktive HTML-Karte der LuftVO-Zonen mit Folium.
+
+    Enthält Tooltips mit OSM-Attributen und eine Legende.
+
+    open_in_browser:
+        True – Karte wird nach dem Speichern im Browser geöffnet.
     """
-
-    input_path = Path(input_geojson)
-    output_path = Path(output_html)
-
-    if not input_path.exists():
-        raise FileNotFoundError(f"GeoJSON-Datei nicht gefunden: {input_path}")
-
-    gdf = gpd.read_file(input_path)
-
-    if gdf.empty:
-        raise ValueError("Die GeoJSON-Datei enthält keine Features.")
-
-    if gdf.crs is None:
-        gdf = gdf.set_crs(WGS84)
-    else:
-        gdf = gdf.to_crs(WGS84)
+    gdf = read_geojson(input_geojson)
 
     minx, miny, maxx, maxy = gdf.total_bounds
-
     center_lat = (miny + maxy) / 2
     center_lon = (minx + maxx) / 2
 
-    m = folium.Map(
-        location=[center_lat, center_lon],
-        zoom_start=11,
-        tiles="OpenStreetMap",
-    )
+    m = folium.Map(location=[center_lat, center_lon], zoom_start=11, tiles="OpenStreetMap")
 
+    # Nur Spalten als Tooltip anzeigen, die tatsächlich in der Datei vorhanden sind.
     possible_tooltip_fields = [
-        ("name", "Name"),
-        ("luftvo_type", "Typ"),
-        ("luftvo_radius_m", "Radius in m"),
-        ("polygon_corners", "Polygon-Ecken"),
-        ("amenity", "Amenity"),
-        ("healthcare", "Healthcare"),
-        ("aeroway", "Aeroway"),
-        ("office", "Office"),
-        ("landuse", "Landuse"),
-        ("military", "Military"),
-        ("power", "Power"),
-        ("boundary", "Boundary"),
-        ("protect_class", "Protect Class"),
+        ("name",                   "Name"),
+        ("luftvo_type",            "Typ"),
+        ("luftvo_radius_m",        "Radius in m"),
+        ("polygon_corners",        "Polygon-Ecken"),
+        ("amenity",                "Amenity"),
+        ("healthcare",             "Healthcare"),
+        ("aeroway",                "Aeroway"),
+        ("office",                 "Office"),
+        ("landuse",                "Landuse"),
+        ("military",               "Military"),
+        ("power",                  "Power"),
+        ("boundary",               "Boundary"),
+        ("protect_class",          "Protect Class"),
         ("short_protection_title", "Schutzgebiet"),
     ]
 
-    tooltip_fields = []
-    tooltip_aliases = []
+    tooltip_fields  = [f for f, _ in possible_tooltip_fields if f in gdf.columns]
+    tooltip_aliases = [a for f, a in possible_tooltip_fields if f in gdf.columns]
 
-    for field, alias in possible_tooltip_fields:
-        if field in gdf.columns:
-            tooltip_fields.append(field)
-            tooltip_aliases.append(alias)
-
-    tooltip = None
-
-    if tooltip_fields:
-        tooltip = folium.GeoJsonTooltip(
-            fields=tooltip_fields,
-            aliases=tooltip_aliases,
-            localize=True,
-            sticky=True,
-        )
+    tooltip = (
+        folium.GeoJsonTooltip(fields=tooltip_fields, aliases=tooltip_aliases, localize=True, sticky=True)
+        if tooltip_fields else None
+    )
 
     folium.GeoJson(
         data=gdf.to_json(default=str),
@@ -151,19 +134,12 @@ def create_geojson_html_map(
         tooltip=tooltip,
     ).add_to(m)
 
+    # Statische HTML-Legende unten links in der Karte.
     legend_html = """
     <div style="
-        position: fixed;
-        bottom: 40px;
-        left: 40px;
-        width: 260px;
-        z-index: 9999;
-        background-color: white;
-        border: 2px solid grey;
-        border-radius: 6px;
-        padding: 10px;
-        font-size: 14px;
-    ">
+        position: fixed; bottom: 40px; left: 40px; width: 260px;
+        z-index: 9999; background-color: white; border: 2px solid grey;
+        border-radius: 6px; padding: 10px; font-size: 14px;">
         <b>Legende</b><br>
         <span style="color:#e53935;">■</span> Krankenhaus<br>
         <span style="color:#1e88e5;">■</span> Polizei<br>
@@ -180,16 +156,13 @@ def create_geojson_html_map(
         <span style="color:#7cb342;">■</span> Landschaftsschutz<br>
     </div>
     """
-
     m.get_root().html.add_child(folium.Element(legend_html))
 
-    m.fit_bounds([
-        [miny, minx],
-        [maxy, maxx],
-    ])
-
+    m.fit_bounds([[miny, minx], [maxy, maxx]])
     folium.LayerControl().add_to(m)
 
+    from pathlib import Path
+    output_path = Path(output_html)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     m.save(output_path)
 
@@ -198,6 +171,10 @@ def create_geojson_html_map(
 
     return output_path
 
+
+# =============================================================================
+# PNG-Karte (Matplotlib)
+# =============================================================================
 
 def create_geojson_png_map(
     input_geojson,
@@ -212,131 +189,65 @@ def create_geojson_png_map(
     png_square_side_km=25,
 ):
     """
-    Erstellt eine statische PNG-Karte mit optionalem Satellitenhintergrund.
+    Erstellt eine statische PNG-Karte der LuftVO-Zonen.
 
-    Wenn fixed_png_extent=True:
-        Es wird nur ein festes Quadrat um den angegebenen Mittelpunkt gezeigt.
+    Zonen werden farblich nach Typ unterschieden; eine Legende wird
+    automatisch erstellt. Optionaler Satelliten-Hintergrund via Esri.
 
-    png_center_lat / png_center_lon:
-        Mittelpunkt des Quadrats in WGS84.
-
-    png_square_side_km:
-        Seitenlänge des Quadrats in Kilometern.
+    fixed_png_extent:
+        True  – Fester Quadratausschnitt um den angegebenen Mittelpunkt.
+        False – Ausschnitt wird aus den Zonengrenzen abgeleitet.
     """
-
-    input_path = Path(input_geojson)
-    output_path = Path(output_png)
-
-    if not input_path.exists():
-        raise FileNotFoundError(f"GeoJSON-Datei nicht gefunden: {input_path}")
-
-    gdf = gpd.read_file(input_path)
-
-    if gdf.empty:
-        raise ValueError("Die GeoJSON-Datei enthält keine Features.")
-
-    if gdf.crs is None:
-        gdf = gdf.set_crs(WGS84)
-    else:
-        gdf = gdf.to_crs(WGS84)
+    gdf = read_geojson(input_geojson)
 
     if "luftvo_type" not in gdf.columns:
         raise ValueError("Spalte 'luftvo_type' fehlt in der GeoJSON-Datei.")
 
-    # Für Satelliten-/Webkarten muss nach EPSG:3857 umgerechnet werden
+    # Für Webkarten-Hintergründe muss in Web Mercator projiziert werden.
     gdf_plot = gdf.to_crs(WEB_MERCATOR)
 
-    # Ausschnitt bestimmen
+    # Kartenausschnitt bestimmen.
     if fixed_png_extent:
-        center_point = gpd.GeoSeries(
-            [Point(png_center_lon, png_center_lat)],
-            crs=WGS84
-        ).to_crs(WEB_MERCATOR).iloc[0]
-
-        half_side_m = (png_square_side_km * 1000) / 2
-
-        minx = center_point.x - half_side_m
-        maxx = center_point.x + half_side_m
-        miny = center_point.y - half_side_m
-        maxy = center_point.y + half_side_m
+        minx, miny, maxx, maxy = get_fixed_extent_web_mercator(
+            center_lat=png_center_lat,
+            center_lon=png_center_lon,
+            square_side_km=png_square_side_km,
+        )
     else:
         minx, miny, maxx, maxy = gdf_plot.total_bounds
 
-    fig, ax = plt.subplots(figsize=(14, 14))
+    fig, ax = setup_map_figure(
+        minx, miny, maxx, maxy,
+        satellite_background=satellite_background,
+        basemap_zoom=basemap_zoom,
+    )
 
-    ax.set_xlim(minx, maxx)
-    ax.set_ylim(miny, maxy)
-
-    # Satelliten-Hintergrund zuerst zeichnen
-    if satellite_background:
-        cx.add_basemap(
-            ax,
-            source=xyz.Esri.WorldImagery,
-            zoom=basemap_zoom,
-        )
-
+    # Jede Zonenart in ihrer Farbe plotten und Legendeneinträge sammeln.
     legend_items = []
 
-    # LuftVO-Zonen darüber legen
     for luftvo_type in sorted(gdf_plot["luftvo_type"].dropna().unique()):
         subset = gdf_plot[gdf_plot["luftvo_type"] == luftvo_type]
+        color  = COLOR_BY_TYPE.get(luftvo_type, "#1976d2")
+        label  = LABEL_BY_TYPE.get(luftvo_type, luftvo_type)
 
-        color = COLOR_BY_TYPE.get(luftvo_type, "#1976d2")
-        label = LABEL_BY_TYPE.get(luftvo_type, luftvo_type)
-
-        subset.plot(
-            ax=ax,
-            facecolor=color,
-            edgecolor=color,
-            linewidth=1.2,
-            alpha=0.35,
-            zorder=2,
-        )
-
-        legend_items.append(
-            Patch(
-                facecolor=color,
-                edgecolor=color,
-                label=label,
-                alpha=0.35,
-            )
-        )
-
-    # Ausschnitt nach dem Plotten nochmals fixieren
-    ax.set_xlim(minx, maxx)
-    ax.set_ylim(miny, maxy)
-
-    if fixed_png_extent:
-        ax.set_title(
-            f"LuftVO-Geozonen – 25 km Quadrat um München Stadtmitte",
-            fontsize=16
-        )
-    else:
-        ax.set_title("LuftVO-Geozonen mit Satellitenhintergrund", fontsize=16)
-
-    ax.set_axis_off()
-    ax.set_aspect("equal")
+        subset.plot(ax=ax, facecolor=color, edgecolor=color, linewidth=1.2, alpha=0.35, zorder=2)
+        legend_items.append(Patch(facecolor=color, edgecolor=color, label=label, alpha=0.35))
 
     if legend_items:
-        ax.legend(
-            handles=legend_items,
-            loc="upper right",
-            fontsize=9,
-            frameon=True,
-        )
+        ax.legend(handles=legend_items, loc="upper right", fontsize=9, frameon=True)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
-
-    if show_map:
-        plt.show()
+    # Kartentitel – verwendet den konfigurierten Wert für die Quadratgröße.
+    if fixed_png_extent:
+        title = f"LuftVO-Geozonen – {png_square_side_km} km Quadrat um München Stadtmitte"
     else:
-        plt.close(fig)
+        title = "LuftVO-Geozonen mit Satellitenhintergrund"
 
-    return output_path
+    return save_map_figure(fig, ax, output_png, title=title, show_map=show_map)
 
+
+# =============================================================================
+# Zentrale Visualisierungsfunktion
+# =============================================================================
 
 def create_geojson_visualization(
     input_geojson,
@@ -353,12 +264,12 @@ def create_geojson_visualization(
     png_square_side_km=25,
 ):
     """
-    Zentrale Visualisierungsfunktion.
+    Zentrale Einstiegsfunktion für die Zonenvisualisierung.
 
     output_format:
-        "html" oder "png"
+        "html" – Interaktive Folium-Karte.
+        "png"  – Statische Matplotlib-Karte.
     """
-
     output_format = output_format.lower().strip()
 
     if output_format == "html":
@@ -382,36 +293,3 @@ def create_geojson_visualization(
         )
 
     raise ValueError("output_format muss 'html' oder 'png' sein.")
-
-
-def main():
-    input_geojson = "drohnen_luftvo_zonen.geojson"
-
-    output_format = "png"
-
-    if output_format == "html":
-        output_file = "drohnen_luftvo_karte.html"
-    elif output_format == "png":
-        output_file = "drohnen_luftvo_karte.png"
-    else:
-        raise ValueError("output_format muss 'html' oder 'png' sein.")
-
-    result_file = create_geojson_visualization(
-        input_geojson=input_geojson,
-        output_path=output_file,
-        output_format=output_format,
-        open_in_browser=True,
-        show_png=True,
-        satellite_background=True,
-        basemap_zoom=13,
-        fixed_png_extent=True,
-        png_center_lat=48.137154,
-        png_center_lon=11.576124,
-        png_square_side_km=25,
-    )
-
-    print(f"Karte wurde erstellt: {result_file}")
-
-
-if __name__ == "__main__":
-    main()
