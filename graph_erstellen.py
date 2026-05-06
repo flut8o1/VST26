@@ -7,6 +7,11 @@ Kanten, die Sperrzonen schneiden, ebenfalls.
 
 Start- und Endpunkt werden als zusätzliche Knoten eingefügt und mit
 den nächsten sichtbaren Gitterknoten verbunden.
+
+Performance-Hinweis:
+    Die vereinigte Sperrzone wird einmalig mit prep() vorberechnet,
+    sodass die tausenden Schnitt-Tests gegen dieselbe Geometrie
+    deutlich schneller ablaufen als ohne Vorbereitung.
 """
 
 from pathlib import Path
@@ -14,7 +19,7 @@ from pathlib import Path
 import geopandas as gpd
 from shapely.geometry import Point, LineString
 
-from utils import WGS84, DEFAULT_METRIC_CRS, get_geometry_union, wgs84_to_metric
+from utils import WGS84, DEFAULT_METRIC_CRS, get_geometry_union, wgs84_to_metric, prepare_geometry
 
 
 # =============================================================================
@@ -29,7 +34,7 @@ def _edge_orientation(from_point, to_point, tolerance=0.001):
         "west_ost"  – horizontale Kante
         "nord_sued" – vertikale Kante
         "diagonal"  – diagonale Kante
-        "special"   – Sonderverbindung (z. B. Start/End-Anbindung)
+        "special"   – Sonderverbindung (Start/End-Anbindung)
     """
     dx = abs(to_point.x - from_point.x)
     dy = abs(to_point.y - from_point.y)
@@ -47,7 +52,7 @@ def _connect_special_node_to_grid(
     *,
     special_node,
     grid_nodes,
-    forbidden_area,
+    forbidden,
     edges,
     start_edge_id,
     edge_kind,
@@ -60,14 +65,16 @@ def _connect_special_node_to_grid(
     aufsteigender Entfernung. Verbindungen, die eine Sperrzone schneiden,
     werden übersprungen.
 
-    Diese Verbindungen dürfen schräg verlaufen, auch wenn diagonale
-    Gitterkanten deaktiviert sind, weil Start-/Endpunkte nicht auf dem
-    Raster liegen müssen.
+    Diese Verbindungen dürfen schräg verlaufen, weil Start-/Endpunkte
+    nicht auf dem Gitter liegen müssen.
+
+    forbidden:
+        PreparedGeometry der vereinigten Sperrzonen (für schnelle Tests).
 
     Rückgabe:
         Nächste freie edge_id (int).
 
-    Wirft ValueError, wenn kein einziger sichtbarer Gitterknoten erreichbar ist.
+    Wirft ValueError, wenn kein sichtbarer Gitterknoten erreichbar ist.
     """
     if max_connections < 1:
         raise ValueError("special_connections_per_point muss mindestens 1 sein.")
@@ -84,15 +91,15 @@ def _connect_special_node_to_grid(
         key=lambda item: item[0],
     )
 
-    edge_id            = start_edge_id
+    edge_id             = start_edge_id
     created_connections = 0
 
-    for distance_m, grid_node in candidates:
+    for _, grid_node in candidates:
         grid_point  = grid_node["geometry"]
         line        = LineString([special_point, grid_point])
 
         # Verbindung überspringen, wenn sie eine Sperrzone schneidet.
-        if line.intersects(forbidden_area):
+        if forbidden.intersects(line):
             continue
 
         orientation = _edge_orientation(special_point, grid_point)
@@ -175,7 +182,7 @@ def create_navigation_graph(
     if special_connections_per_point < 1:
         raise ValueError("special_connections_per_point muss mindestens 1 sein.")
 
-    # --- Sperrzonen laden und vereinigen ---
+    # --- Sperrzonen laden, reparieren und zu einer Gesamtfläche vereinigen ---
 
     zones = gpd.read_file(zones_path)
 
@@ -184,15 +191,15 @@ def create_navigation_graph(
 
     zones        = zones.set_crs(WGS84) if zones.crs is None else zones.to_crs(WGS84)
     zones_metric = zones.to_crs(metric_crs)
+    zones_metric["geometry"] = zones_metric.geometry.buffer(0)   # Topologie-Fehler beheben
 
-    # buffer(0) behebt mögliche Topologie-Fehler in den Zonengeometrien.
-    zones_metric["geometry"] = zones_metric.geometry.buffer(0)
-
-    # Alle Sperrzonen zu einer einzigen Fläche vereinigen für schnelle
-    # Schnitt-Tests bei Knoten und Kanten.
     forbidden_area = get_geometry_union(zones_metric)
 
-    # --- Start- und Endpunkte vorbereiten ---
+    # Einmalige Vorberechnung: alle folgenden intersects()-Tests laufen gegen
+    # dieselbe Geometrie – prep() macht sie deutlich schneller.
+    forbidden = prepare_geometry(forbidden_area)
+
+    # --- Start- und Endpunkte vorbereiten und validieren ---
 
     special_points = []
 
@@ -204,16 +211,14 @@ def create_navigation_graph(
         pt = wgs84_to_metric(end_lat, end_lon, metric_crs)
         special_points.append({"node_kind": "end", "label": "Ende", "geometry": pt})
 
-    # Sicherstellen, dass Start/End nicht innerhalb einer Sperrzone liegen.
     for sp in special_points:
-        if sp["geometry"].intersects(forbidden_area):
+        if forbidden.intersects(sp["geometry"]):
             raise ValueError(f"{sp['label']} liegt innerhalb oder auf einer Sperrzone.")
 
     # --- Bounding Box bestimmen (Zonen + Start/End + optionales Padding) ---
 
     minx, miny, maxx, maxy = zones_metric.total_bounds
 
-    # Bounding Box auf Start-/Endpunkte erweitern, falls sie außerhalb liegen.
     for sp in special_points:
         pt   = sp["geometry"]
         minx = min(minx, pt.x)
@@ -243,11 +248,11 @@ def create_navigation_graph(
         while x <= maxx:
             point = Point(x, y)
 
-            # Nur Punkte außerhalb aller Sperrzonen behalten.
-            if not point.intersects(forbidden_area):
+            # Vorberechnete Geometrie macht diesen Test deutlich schneller.
+            if not forbidden.intersects(point):
                 node_id = len(grid_nodes)
 
-                grid_node = {
+                grid_nodes.append({
                     "node_id":   node_id,
                     "node_kind": "grid",
                     "label":     None,
@@ -257,9 +262,8 @@ def create_navigation_graph(
                     "y":         y,
                     "spacing_m": spacing_m,
                     "geometry":  point,
-                }
+                })
 
-                grid_nodes.append(grid_node)
                 node_lookup[(row_index, col_index)] = node_id
 
             x += spacing_m
@@ -295,8 +299,7 @@ def create_navigation_graph(
     # Schritt 3: Gitterkanten erzeugen
     # ==========================================================================
 
-    # Nachbar-Offsets definieren.
-    # Nur Vorwärts-Nachbarn werden geprüft, um doppelte Kanten zu vermeiden.
+    # Nur Vorwärts-Nachbarn prüfen, um doppelte Kanten zu vermeiden.
     # Ohne Diagonalen: rechts (0,1) und oben (1,0).
     # Mit Diagonalen: zusätzlich (1,1) und (1,-1).
     neighbor_offsets = [(0, 1), (1, 0)]
@@ -323,7 +326,7 @@ def create_navigation_graph(
             line     = LineString([from_point, to_point])
 
             # Kanten, die Sperrzonen schneiden, werden verworfen.
-            if line.intersects(forbidden_area):
+            if forbidden.intersects(line):
                 continue
 
             orientation = _edge_orientation(from_point, to_point)
@@ -351,7 +354,7 @@ def create_navigation_graph(
         edge_id = _connect_special_node_to_grid(
             special_node=node,
             grid_nodes=grid_nodes,
-            forbidden_area=forbidden_area,
+            forbidden=forbidden,
             edges=edges,
             start_edge_id=edge_id,
             edge_kind=f"{node['node_kind']}_connection",

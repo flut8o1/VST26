@@ -1,12 +1,30 @@
 """
-Graph_erstellen_Zonen.py – Erzeugung eines Sichtbarkeitsgraphen um LuftVO-Zonen.
+Graph_erstellen_Zonen.py – Sichtbarkeitsgraph mit Knoten an Zonenecken.
 
-Statt eines regelmäßigen Gitters werden Knoten 10 m außerhalb jeder Ecke
-der Sperrzonen platziert. Kanten werden zwischen allen Knotenpaaren gezogen,
-die sich gegenseitig „sehen" (d. h. deren Verbindungslinie keine Sperrzone
-schneidet). Optional werden sich kreuzende Kanten herausgefiltert.
+Algorithmus in vier Schritten:
 
-Start- und Endpunkt werden als zusätzliche Knoten eingefügt.
+  1. Knoten + Ringzugehörigkeit
+     Für jede Polygonecke jeder Sperrzone wird ein Knoten offset_m Meter
+     außerhalb der Ecke platziert. Die Zugehörigkeit zu jedem Polygon-Ring
+     wird mitgespeichert.
+
+  2. Ring-Kanten (Zonenrand-Traversierung)
+     Benachbarte Ecken desselben Rings werden als erste Kanten verbunden
+     (sofern die Verbindung keine Zone schneidet). Das stellt sicher, dass
+     eine Drohne immer um eine Zone herumfliegen kann.
+
+  3. Sichtbarkeitskanten (kreuzungsfrei)
+     Alle übrigen Knotenpaare (inkl. Start/End) werden als Kandidaten
+     geprüft: kürzeste zuerst, verworfen wenn sie eine Zone oder eine
+     bereits akzeptierte Kante kreuzen. Statt intersects() wird crosses()
+     verwendet – damit werden gemeinsame Endpunkte (erlaubt) automatisch
+     korrekt behandelt, ohne manuelle Mengenoperation.
+
+  4. Speichern als GeoJSON
+
+Performance:
+    Die vereinigte Sperrzone wird einmalig mit prep() vorberechnet,
+    sodass alle Zone-Schnitt-Tests deutlich schneller laufen.
 """
 
 from pathlib import Path
@@ -16,72 +34,65 @@ import geopandas as gpd
 from shapely.geometry import Point, LineString
 from shapely.geometry.polygon import orient
 
-from utils import WGS84, DEFAULT_METRIC_CRS, get_geometry_union, wgs84_to_metric
+from utils import (
+    WGS84, DEFAULT_METRIC_CRS,
+    get_geometry_union, wgs84_to_metric, prepare_geometry,
+)
 
 
 # =============================================================================
-# Geometrie-Hilfsfunktionen für Außenrichtungen an Zonenecken
+# Geometrie-Hilfsfunktionen: Polygone iterieren
 # =============================================================================
 
 def _iter_polygons(geometry):
-    """
-    Gibt alle Polygone aus Polygon, MultiPolygon oder GeometryCollection zurück.
-    """
+    """Gibt alle Polygone aus Polygon, MultiPolygon oder GeometryCollection zurück."""
     if geometry is None or geometry.is_empty:
         return
 
     if geometry.geom_type == "Polygon":
         yield geometry
-
     elif geometry.geom_type == "MultiPolygon":
-        for polygon in geometry.geoms:
-            yield polygon
-
+        for poly in geometry.geoms:
+            yield poly
     elif geometry.geom_type == "GeometryCollection":
         for part in geometry.geoms:
             yield from _iter_polygons(part)
 
 
+# =============================================================================
+# Geometrie-Hilfsfunktionen: Außenrichtung an Polygonecken
+# =============================================================================
+
 def _unit_vector(dx, dy):
     """Normiert einen Vektor auf Länge 1. Gibt None zurück bei Nullvektor."""
     length = sqrt(dx * dx + dy * dy)
-
-    if length == 0:
-        return None
-
-    return dx / length, dy / length
+    return (dx / length, dy / length) if length > 0 else None
 
 
 def _right_normal(dx, dy):
     """
-    Berechnet die rechte Normalenrichtung eines Vektors.
+    Rechte Normalenrichtung eines Vektors (um 90° im Uhrzeigersinn gedreht).
 
-    Für CCW-orientierte Außenringe zeigt die rechte Normale nach außen.
+    Für CCW-orientierte Außenringe zeigt die rechte Normale nach außen –
+    das ist die Richtung, in die wir den Offset-Knoten platzieren wollen.
     """
     unit = _unit_vector(dx, dy)
-
     if unit is None:
         return None
-
     ux, uy = unit
     return uy, -ux
 
 
-def _vertex_outward_direction(previous_coord, current_coord, next_coord):
+def _vertex_outward_direction(prev, curr, nxt):
     """
-    Berechnet die Außenrichtung an einer Polygonecke.
+    Berechnet die Außenrichtung an einer Polygonecke als Mittelnormale
+    der beiden angrenzenden Kanten.
 
-    Die Polygone werden vorher auf CCW-Orientierung (counter-clockwise) gebracht.
-    Für CCW-Außenringe zeigt die rechte Normale nach außen, daher wird der
-    Mittelwert der rechten Normalen der beiden angrenzenden Kanten genutzt.
+    prev / curr / nxt:
+        Koordinatentuples der Vorgänger-, aktuellen und Nachfolgerecke.
     """
-    px, py = previous_coord
-    cx, cy = current_coord
-    nx, ny = next_coord
-
-    # Richtungsvektoren der angrenzenden Kanten
-    n1 = _right_normal(cx - px, cy - py)
-    n2 = _right_normal(nx - cx, ny - cy)
+    n1 = _right_normal(curr[0] - prev[0], curr[1] - prev[1])
+    n2 = _right_normal(nxt[0]  - curr[0], nxt[1]  - curr[1])
 
     if n1 is None and n2 is None:
         return None
@@ -90,20 +101,21 @@ def _vertex_outward_direction(previous_coord, current_coord, next_coord):
     if n2 is None:
         return n1
 
-    # Mittelwert der beiden Außennormalen normiert
+    # Mittelnormale normieren; Fallback auf n2 bei Nullvektor (Kehrtwende).
     direction = _unit_vector(n1[0] + n2[0], n1[1] + n2[1])
-
-    # Wenn der Mittelwert ein Nullvektor ist (Kehrtwende), Fallback auf n2.
     return direction if direction is not None else n2
 
 
-def _candidate_offset_point(vertex_coord, direction, offset_m, forbidden_area):
+def _candidate_offset_point(vertex_coord, direction, offset_m, forbidden):
     """
-    Erstellt einen Knoten im Abstand offset_m außerhalb einer Zonenecke.
+    Platziert einen Knoten offset_m Meter außerhalb einer Polygonecke.
 
-    Zuerst wird die berechnete Außenrichtung probiert. Falls der Kandidat
+    Zuerst wird die berechnete Außenrichtung versucht. Falls der Punkt
     trotzdem in einer Sperrzone liegt (z. B. bei sehr engen Winkeln),
     werden 32 gleichmäßig verteilte Richtungen im Kreis getestet.
+
+    forbidden:
+        PreparedGeometry der vereinigten Sperrzonen.
 
     Rückgabe:
         Shapely Point oder None, wenn alle Richtungen blockiert sind.
@@ -113,118 +125,239 @@ def _candidate_offset_point(vertex_coord, direction, offset_m, forbidden_area):
     if direction is not None:
         dx, dy    = direction
         candidate = Point(x + dx * offset_m, y + dy * offset_m)
-
-        if not candidate.intersects(forbidden_area):
+        if not forbidden.intersects(candidate):
             return candidate
 
-    # Fallback: Kreis-Scan mit 32 gleichmäßig verteilten Richtungen.
+    # Kreis-Scan als Fallback.
     for i in range(32):
         angle     = 2 * pi * i / 32
         candidate = Point(x + cos(angle) * offset_m, y + sin(angle) * offset_m)
-
-        if not candidate.intersects(forbidden_area):
+        if not forbidden.intersects(candidate):
             return candidate
 
     return None
 
 
 # =============================================================================
-# Kantenschnitt-Prüfung
+# Schritt 1: Knoten erzeugen und Ringzugehörigkeit tracken
 # =============================================================================
 
-def _line_crosses_existing_edges(line, from_node, to_node, existing_edges):
+def _create_nodes_and_rings(zones_metric, forbidden, *, offset_m):
     """
-    Prüft, ob eine neue Kante eine bereits gewählte Kante schneidet.
+    Erzeugt Knoten an den Außenecken jedes Sperrzonenpolygons.
 
-    Kanten dürfen sich an einem gemeinsamen Endpunkt treffen –
-    nur echte Kreuzungen (ohne gemeinsamen Knoten) werden abgelehnt.
+    Gibt neben den Knoten auch die Ringzugehörigkeit zurück: eine Liste
+    von Listen, wobei jede innere Liste die node_ids eines Polygon-Rings
+    in Reihenfolge enthält (None für Ecken, bei denen kein freier Punkt
+    gefunden wurde).
+
+    Doppelte Positionen (gleiche Koordinaten auf 2 Dezimalstellen) werden
+    dedupliziert – der erste erzeugte Knoten an dieser Position wird
+    wiederverwendet.
+
+    Rückgabe:
+        (nodes, rings)
     """
-    new_nodes = {from_node, to_node}
-
-    for edge in existing_edges:
-        existing_nodes = {edge["from_node"], edge["to_node"]}
-
-        # Gemeinsame Endpunkte sind kein Schnitt.
-        if new_nodes & existing_nodes:
-            continue
-
-        if line.intersects(edge["geometry"]):
-            return True
-
-    return False
-
-
-# =============================================================================
-# Knoten-Erzeugung
-# =============================================================================
-
-def _create_zone_corner_nodes(zones_metric, forbidden_area, *, offset_m=10):
-    """
-    Erstellt Knoten im Abstand offset_m außerhalb jeder Ecke der Sperrzonen.
-
-    Für jede Ecke jedes Polygons wird eine Außenrichtung berechnet und
-    ein Kandidatenpunkt im Abstand offset_m platziert. Doppelte Knoten
-    (auf 2 Dezimalstellen gerundet) werden übersprungen.
-    """
-    nodes      = []
-    used_points = set()
+    nodes = []
+    rings = []
+    seen  = {}   # (rounded_x, rounded_y) -> node_id
 
     for _, row in zones_metric.iterrows():
-        geom = row.geometry
-
-        for polygon in _iter_polygons(geom):
+        for polygon in _iter_polygons(row.geometry):
             if polygon.is_empty:
                 continue
 
-            # CCW-Orientierung sicherstellen, damit die rechte Normale nach außen zeigt.
-            polygon      = orient(polygon, sign=1.0)
-            coords       = list(polygon.exterior.coords)
+            # CCW-Orientierung sicherstellen: rechte Normale zeigt nach außen.
+            polygon = orient(polygon, sign=1.0)
+            coords  = list(polygon.exterior.coords)[:-1]   # schließenden Punkt entfernen
 
-            # Letzter Punkt ist identisch mit erstem – für den Ring entfernen.
-            if len(coords) < 4:
+            if len(coords) < 3:
                 continue
 
-            ring        = coords[:-1]
-            ring_length = len(ring)
+            n        = len(coords)
+            ring_ids = []
 
-            for i, current_coord in enumerate(ring):
-                previous_coord = ring[(i - 1) % ring_length]
-                next_coord     = ring[(i + 1) % ring_length]
-
-                direction = _vertex_outward_direction(previous_coord, current_coord, next_coord)
-
-                candidate = _candidate_offset_point(
-                    vertex_coord=current_coord,
-                    direction=direction,
-                    offset_m=offset_m,
-                    forbidden_area=forbidden_area,
-                )
+            for i, cc in enumerate(coords):
+                pc        = coords[(i - 1) % n]
+                nc        = coords[(i + 1) % n]
+                direction = _vertex_outward_direction(pc, cc, nc)
+                candidate = _candidate_offset_point(cc, direction, offset_m, forbidden)
 
                 if candidate is None:
+                    ring_ids.append(None)
                     continue
 
-                # Doppelte Knoten vermeiden (auf 2 Dezimalstellen gerundet).
                 key = (round(candidate.x, 2), round(candidate.y, 2))
 
-                if key in used_points:
-                    continue
+                if key in seen:
+                    # Gleiche Position wie ein bereits erzeugter Knoten → wiederverwenden.
+                    ring_ids.append(seen[key])
+                else:
+                    node_id      = len(nodes)
+                    seen[key]    = node_id
+                    ring_ids.append(node_id)
+                    nodes.append({
+                        "node_id":       node_id,
+                        "node_kind":     "zone",
+                        "label":         "Zone",
+                        "grid_row":      None,
+                        "grid_col":      None,
+                        "x":             candidate.x,
+                        "y":             candidate.y,
+                        "spacing_m":     None,
+                        "zone_offset_m": offset_m,
+                        "geometry":      candidate,
+                    })
 
-                used_points.add(key)
+            rings.append(ring_ids)
 
-                nodes.append({
-                    "node_id":      len(nodes),
-                    "node_kind":    "zone",
-                    "label":        "Zone",
-                    "grid_row":     None,
-                    "grid_col":     None,
-                    "x":            candidate.x,
-                    "y":            candidate.y,
-                    "spacing_m":    None,
-                    "zone_offset_m": offset_m,
-                    "geometry":     candidate,
-                })
+    return nodes, rings
 
-    return nodes
+
+# =============================================================================
+# Schritt 2: Ring-Kanten erzeugen (benachbarte Ecken desselben Polygons)
+# =============================================================================
+
+def _build_ring_edges(rings, node_by_id, forbidden):
+    """
+    Verbindet jeweils benachbarte Ecken desselben Polygon-Rings.
+
+    Diese Kanten bilden die Zonenrand-Traversierung: eine Drohne kann
+    immer um eine Sperrzone herumfliegen, indem sie von Eckknoten zu
+    Eckknoten entlanggeht.
+
+    Kanten, deren Verbindungslinie eine Sperrzone schneidet (z. B. bei
+    sehr konkaven Polygonen), werden verworfen.
+
+    Rückgabe:
+        (edges, connected_pairs)
+        edges:           Liste von Kanten-Dicts
+        connected_pairs: Set von frozenset({from_id, to_id}) – für die
+                         spätere Duplikats-Vermeidung
+    """
+    edges           = []
+    connected_pairs = set()
+
+    for ring_ids in rings:
+        n = len(ring_ids)
+
+        for i in range(n):
+            from_id = ring_ids[i]
+            to_id   = ring_ids[(i + 1) % n]
+
+            if from_id is None or to_id is None or from_id == to_id:
+                continue
+
+            pair = frozenset((from_id, to_id))
+            if pair in connected_pairs:
+                continue
+
+            from_pt = node_by_id[from_id]["geometry"]
+            to_pt   = node_by_id[to_id]["geometry"]
+            line    = LineString([from_pt, to_pt])
+
+            if forbidden.intersects(line):
+                continue
+
+            edges.append({
+                "edge_id":          len(edges),
+                "from_node":        from_id,
+                "to_node":          to_id,
+                "length_m":         line.length,
+                "spacing_m":        None,
+                "diagonal":         None,
+                "connect_diagonal": None,
+                "edge_kind":        "ring",
+                "orientation":      "ring",
+                "geometry":         line,
+            })
+            connected_pairs.add(pair)
+
+    return edges, connected_pairs
+
+
+# =============================================================================
+# Schritt 3: Sichtbarkeitskanten erzeugen (kreuzungsfrei)
+# =============================================================================
+
+def _build_visibility_edges(nodes, forbidden, existing_edges, connected_pairs, *, max_distance_m):
+    """
+    Fügt Sichtbarkeitskanten zwischen allen Knotenpaaren hinzu, die noch
+    nicht durch Ring-Kanten verbunden sind.
+
+    Vorgehen:
+    - Alle gültigen Kandidatenpaare erzeugen:
+        * nicht bereits verbunden (connected_pairs)
+        * Verbindungslinie schneidet keine Sperrzone (forbidden.intersects)
+        * optionale Maximallänge einhalten
+    - Kandidaten nach Länge sortieren (kürzeste zuerst)
+    - Greedy: Kante aufnehmen, wenn sie keine bereits akzeptierte Kante
+      kreuzt (geprüft mit crosses() – gemeinsame Endpunkte zählen nicht
+      als Kreuzung und brauchen keine manuelle Ausnahmebehandlung)
+
+    Alle Knoten (inkl. Start/End) nehmen teil, sodass keine separate
+    Anbindungslogik für Start/End nötig ist.
+
+    Rückgabe:
+        Liste neuer Kanten-Dicts (edge_id fortlaufend nach existing_edges).
+    """
+
+    # --- Kandidaten sammeln ---
+
+    candidates = []
+
+    for i in range(len(nodes)):
+        for j in range(i + 1, len(nodes)):
+            from_id = nodes[i]["node_id"]
+            to_id   = nodes[j]["node_id"]
+
+            if frozenset((from_id, to_id)) in connected_pairs:
+                continue
+
+            from_pt  = nodes[i]["geometry"]
+            to_pt    = nodes[j]["geometry"]
+            line     = LineString([from_pt, to_pt])
+            length_m = line.length
+
+            if max_distance_m is not None and length_m > max_distance_m:
+                continue
+
+            if forbidden.intersects(line):
+                continue
+
+            candidates.append((length_m, from_id, to_id, line))
+
+    # Kürzeste zuerst: bei Kreuzungskonflikten werden die kürzeren Kanten bevorzugt.
+    candidates.sort()
+
+    # --- Greedy-Auswahl ohne Kreuzungen ---
+
+    # Vorhandene Ring-Kanten-Geometrien als Basis für den Kreuzungstest.
+    accepted_geoms = [e["geometry"] for e in existing_edges]
+    new_edges      = []
+    base_id        = len(existing_edges)
+
+    for length_m, from_id, to_id, line in candidates:
+        # crosses() prüft echte Kreuzungen (innere Punkte beider Linien).
+        # Gemeinsame Endpunkte geben False zurück – kein manueller Check nötig.
+        if any(line.crosses(g) for g in accepted_geoms):
+            continue
+
+        new_edges.append({
+            "edge_id":          base_id + len(new_edges),
+            "from_node":        from_id,
+            "to_node":          to_id,
+            "length_m":         length_m,
+            "spacing_m":        None,
+            "diagonal":         None,
+            "connect_diagonal": None,
+            "edge_kind":        "visibility",
+            "orientation":      "visibility",
+            "geometry":         line,
+        })
+        accepted_geoms.append(line)
+
+    return new_edges
 
 
 # =============================================================================
@@ -238,7 +371,6 @@ def create_zone_visibility_graph(
     *,
     metric_crs=DEFAULT_METRIC_CRS,
     node_offset_m=10,
-    prevent_edge_crossings=True,
     max_edge_distance_m=None,
     start_lat=None,
     start_lon=None,
@@ -246,15 +378,16 @@ def create_zone_visibility_graph(
     end_lon=None,
 ):
     """
-    Erstellt einen Sichtbarkeitsgraphen um LuftVO-Sperrzonen.
+    Erstellt einen kreuzungsfreien Sichtbarkeitsgraphen um LuftVO-Sperrzonen.
 
-    Prinzip:
-    - Von jeder Ecke der Sperrzonen wird im Abstand node_offset_m ein Knoten erzeugt.
-    - Start- und Endpunkt werden als zusätzliche Knoten eingefügt.
-    - Alle Knotenpaare, die sich gegenseitig sehen können (keine Sperrzone
-      auf der Verbindungslinie), werden als Kanten aufgenommen.
-    - Optional: Kanten, die andere Kanten kreuzen, werden verworfen.
-      Bei Konflikten werden die kürzesten Kanten bevorzugt.
+    Schritte:
+    1. Knoten an den Außenecken jeder Sperrzone (offset_m außerhalb).
+    2. Ring-Kanten: benachbarte Ecken desselben Polygons verbinden.
+    3. Sichtbarkeitskanten: kürzeste kreuzungsfreie Verbindungen zwischen
+       allen Knoten (inkl. Start/End) hinzufügen.
+    4. Ausgabe als GeoJSON.
+
+    Kanten dürfen sich nie kreuzen (kreuzungsfreie Bedingung ist immer aktiv).
 
     Rückgabe:
         (nodes_wgs84, edges_wgs84) – beide als GeoDataFrames in WGS84.
@@ -269,7 +402,7 @@ def create_zone_visibility_graph(
     if node_offset_m <= 0:
         raise ValueError("node_offset_m muss größer als 0 sein.")
 
-    # --- Sperrzonen laden und vereinigen ---
+    # --- Sperrzonen laden, reparieren und vereinigen ---
 
     zones = gpd.read_file(zones_path)
 
@@ -278,19 +411,20 @@ def create_zone_visibility_graph(
 
     zones        = zones.set_crs(WGS84) if zones.crs is None else zones.to_crs(WGS84)
     zones_metric = zones.to_crs(metric_crs)
-
-    # buffer(0) behebt mögliche Topologie-Fehler in den Zonengeometrien.
-    zones_metric["geometry"] = zones_metric.geometry.buffer(0)
+    zones_metric["geometry"] = zones_metric.geometry.buffer(0)   # Topologie-Fehler beheben
 
     forbidden_area = get_geometry_union(zones_metric)
 
+    # Einmalige Vorberechnung der Sperrzone für schnelle wiederholte Tests.
+    forbidden = prepare_geometry(forbidden_area)
+
     # ==========================================================================
-    # Schritt 1: Knoten um Zonenecken erzeugen
+    # Schritt 1: Knoten und Ring-Zugehörigkeit erzeugen
     # ==========================================================================
 
-    nodes = _create_zone_corner_nodes(
+    nodes, rings = _create_nodes_and_rings(
         zones_metric=zones_metric,
-        forbidden_area=forbidden_area,
+        forbidden=forbidden,
         offset_m=node_offset_m,
     )
 
@@ -300,11 +434,13 @@ def create_zone_visibility_graph(
     # ==========================================================================
     # Schritt 2: Start- und Endknoten hinzufügen
     # ==========================================================================
+    # Start/End werden VOR der Sichtbarkeitsphase eingefügt, sodass sie
+    # im selben Durchlauf wie alle anderen Knoten verbunden werden.
 
     if start_lat is not None and start_lon is not None:
-        start_point = wgs84_to_metric(start_lat, start_lon, metric_crs)
+        pt = wgs84_to_metric(start_lat, start_lon, metric_crs)
 
-        if start_point.intersects(forbidden_area):
+        if forbidden.intersects(pt):
             raise ValueError("Startpunkt liegt innerhalb oder auf einer Sperrzone.")
 
         nodes.append({
@@ -313,17 +449,17 @@ def create_zone_visibility_graph(
             "label":         "Start",
             "grid_row":      None,
             "grid_col":      None,
-            "x":             start_point.x,
-            "y":             start_point.y,
+            "x":             pt.x,
+            "y":             pt.y,
             "spacing_m":     None,
             "zone_offset_m": None,
-            "geometry":      start_point,
+            "geometry":      pt,
         })
 
     if end_lat is not None and end_lon is not None:
-        end_point = wgs84_to_metric(end_lat, end_lon, metric_crs)
+        pt = wgs84_to_metric(end_lat, end_lon, metric_crs)
 
-        if end_point.intersects(forbidden_area):
+        if forbidden.intersects(pt):
             raise ValueError("Endpunkt liegt innerhalb oder auf einer Sperrzone.")
 
         nodes.append({
@@ -332,89 +468,55 @@ def create_zone_visibility_graph(
             "label":         "Ende",
             "grid_row":      None,
             "grid_col":      None,
-            "x":             end_point.x,
-            "y":             end_point.y,
+            "x":             pt.x,
+            "y":             pt.y,
             "spacing_m":     None,
             "zone_offset_m": None,
-            "geometry":      end_point,
+            "geometry":      pt,
         })
 
-    # ==========================================================================
-    # Schritt 3: Sichtbare Kantenkandidaten erzeugen
-    # ==========================================================================
-
-    candidates = []
-
-    for i in range(len(nodes)):
-        from_node = nodes[i]
-
-        for j in range(i + 1, len(nodes)):
-            to_node = nodes[j]
-
-            from_point = from_node["geometry"]
-            to_point   = to_node["geometry"]
-            line       = LineString([from_point, to_point])
-            length_m   = line.length
-
-            # Kanten jenseits der maximalen Länge sofort verwerfen.
-            if max_edge_distance_m is not None and length_m > max_edge_distance_m:
-                continue
-
-            # Kante verwerfen, wenn sie eine Sperrzone schneidet.
-            if line.intersects(forbidden_area):
-                continue
-
-            candidates.append({
-                "from_node": from_node["node_id"],
-                "to_node":   to_node["node_id"],
-                "length_m":  length_m,
-                "geometry":  line,
-            })
-
-    if not candidates:
-        raise ValueError("Es wurden keine sichtbaren Kantenkandidaten gefunden.")
-
-    # Kürzeste Kanten zuerst: Bei Kreuzungsfilterung bleiben die kürzeren erhalten.
-    candidates.sort(key=lambda e: e["length_m"])
+    node_by_id = {n["node_id"]: n for n in nodes}
 
     # ==========================================================================
-    # Schritt 4: Kanten auswählen (optional ohne Kreuzungen)
+    # Schritt 3a: Ring-Kanten erzeugen (Zonenrand-Traversierung)
     # ==========================================================================
 
-    edges = []
+    ring_edges, connected_pairs = _build_ring_edges(rings, node_by_id, forbidden)
 
-    for candidate in candidates:
-        line      = candidate["geometry"]
-        from_node = candidate["from_node"]
-        to_node   = candidate["to_node"]
+    # ==========================================================================
+    # Schritt 3b: Sichtbarkeitskanten erzeugen (inkl. Start/End-Anbindung)
+    # ==========================================================================
 
-        # Wenn aktiviert: Kante verwerfen, falls sie eine bereits gewählte kreuzt.
-        if prevent_edge_crossings:
-            if _line_crosses_existing_edges(line, from_node, to_node, edges):
-                continue
+    vis_edges = _build_visibility_edges(
+        nodes=nodes,
+        forbidden=forbidden,
+        existing_edges=ring_edges,
+        connected_pairs=connected_pairs,
+        max_distance_m=max_edge_distance_m,
+    )
 
-        edges.append({
-            "edge_id":          len(edges),
-            "from_node":        from_node,
-            "to_node":          to_node,
-            "length_m":         candidate["length_m"],
-            "spacing_m":        None,
-            "diagonal":         None,
-            "connect_diagonal": None,
-            "edge_kind":        "visibility",
-            "orientation":      "visibility",
-            "geometry":         line,
-        })
+    all_edges = ring_edges + vis_edges
 
-    if not edges:
+    if not all_edges:
         raise ValueError("Es wurden keine erlaubten Kanten erzeugt.")
 
+    # Sicherstellen, dass Start und End mindestens eine Verbindung haben.
+    for sp_kind in ("start", "end"):
+        sp_list = [n for n in nodes if n["node_kind"] == sp_kind]
+        for sp in sp_list:
+            sid = sp["node_id"]
+            if not any(e["from_node"] == sid or e["to_node"] == sid for e in all_edges):
+                raise ValueError(
+                    f"{sp['label']} hat keine Verbindung zum Graphen. "
+                    f"Vergrößern Sie ZONEN_MAX_KANTENLAENGE_M oder prüfen Sie den Standort."
+                )
+
     # ==========================================================================
-    # Schritt 5: Als GeoJSON speichern
+    # Schritt 4: Als GeoJSON speichern
     # ==========================================================================
 
     nodes_gdf = gpd.GeoDataFrame(nodes, geometry="geometry", crs=metric_crs)
-    edges_gdf = gpd.GeoDataFrame(edges, geometry="geometry", crs=metric_crs)
+    edges_gdf = gpd.GeoDataFrame(all_edges, geometry="geometry", crs=metric_crs)
 
     nodes_path.parent.mkdir(parents=True, exist_ok=True)
     edges_path.parent.mkdir(parents=True, exist_ok=True)

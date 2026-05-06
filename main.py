@@ -110,10 +110,8 @@ GRAPH_BBOX_PADDING_M = 0
 # Abstand der Knoten von jeder Zonenecke in Metern
 ZONEN_KNOTEN_ABSTAND_M = 10
 
-# True = sich kreuzende Kanten werden entfernt (kürzere werden bevorzugt)
-ZONEN_KANTEN_KREUZUNGEN_VERMEIDEN = True
-
 # Maximale Kantenlänge in Metern (None = unbegrenzt)
+# Kanten kreuzen sich nie – das ist eine harte Bedingung des Algorithmus.
 ZONEN_MAX_KANTENLAENGE_M = 3000
 
 
@@ -295,7 +293,6 @@ def main():
             output_edges_geojson=output_graph_edges,
 
             node_offset_m=ZONEN_KNOTEN_ABSTAND_M,
-            prevent_edge_crossings=ZONEN_KANTEN_KREUZUNGEN_VERMEIDEN,
             max_edge_distance_m=ZONEN_MAX_KANTENLAENGE_M,
 
             start_lat=START_LAT,

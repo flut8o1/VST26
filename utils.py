@@ -19,6 +19,7 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import xyzservices.providers as xyz
 from shapely.geometry import Point
+from shapely.prepared import prep
 
 
 # =============================================================================
@@ -71,6 +72,20 @@ def read_geojson(file_path):
 # =============================================================================
 # Geometrie-Hilfsfunktionen
 # =============================================================================
+
+def prepare_geometry(geom):
+    """
+    Erstellt eine vorberechnete Geometrie für schnelle wiederholte Schnitt-Tests.
+
+    Shapely's prep() baut intern einen R-Baum und zerlegt die Geometrie,
+    sodass jeder folgende intersects()-Aufruf gegen dieselbe Geometrie
+    deutlich schneller ist als ohne Vorbereitung.
+
+    Besonders nützlich, wenn die Sperrzonen-Gesamtfläche für tausende
+    Knoten- und Kantentests verwendet wird.
+    """
+    return prep(geom)
+
 
 def get_geometry_union(gdf):
     """
