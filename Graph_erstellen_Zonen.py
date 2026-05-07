@@ -23,14 +23,20 @@ Algorithmus in vier Schritten:
   4. Speichern als GeoJSON
 
 Performance:
-    Die vereinigte Sperrzone wird einmalig mit prep() vorberechnet,
-    sodass alle Zone-Schnitt-Tests deutlich schneller laufen.
+    - Zonenschnitt-Tests: prep() (PreparedGeometry) für Knoten/Ring-Kanten;
+      vektorisiertes shapely.intersects() (GEOS-Batch) für den O(N²)-Kandidaten-Scan.
+    - Kreuzungstest: STRtree mit predicate='crosses' reduziert den pro-Kante-Check
+      von O(E) auf O(log E + k). Eine Pending-Liste von max. REBUILD_EVERY Kanten
+      wird linear geprüft und danach in den Baum überführt.
 """
 
 from pathlib import Path
 from math import sqrt, cos, sin, pi
 
+import numpy as np
+import shapely
 import geopandas as gpd
+from shapely import STRtree
 from shapely.geometry import Point, LineString
 from shapely.geometry.polygon import orient
 
@@ -280,67 +286,96 @@ def _build_ring_edges(rings, node_by_id, forbidden):
 # Schritt 3: Sichtbarkeitskanten erzeugen (kreuzungsfrei)
 # =============================================================================
 
-def _build_visibility_edges(nodes, forbidden, existing_edges, connected_pairs, *, max_distance_m):
+def _build_visibility_edges(nodes, forbidden, forbidden_area, existing_edges, connected_pairs, *, max_distance_m):
     """
     Fügt Sichtbarkeitskanten zwischen allen Knotenpaaren hinzu, die noch
     nicht durch Ring-Kanten verbunden sind.
 
     Vorgehen:
-    - Alle gültigen Kandidatenpaare erzeugen:
-        * nicht bereits verbunden (connected_pairs)
-        * Verbindungslinie schneidet keine Sperrzone (forbidden.intersects)
-        * optionale Maximallänge einhalten
-    - Kandidaten nach Länge sortieren (kürzeste zuerst)
-    - Greedy: Kante aufnehmen, wenn sie keine bereits akzeptierte Kante
-      kreuzt (geprüft mit crosses() – gemeinsame Endpunkte zählen nicht
-      als Kreuzung und brauchen keine manuelle Ausnahmebehandlung)
+    1. Kandidaten-Scan (O(N²)):
+       Entfernungsfilter direkt auf Koordinaten (kein LineString-Objekt nötig).
+    2. Batch-Erzeugung und Zonenschnitt (vektorisiert):
+       Alle verbliebenen Linien werden per shapely.linestrings() auf GEOS-Ebene
+       erzeugt; shapely.intersects(arr, forbidden_area) prüft den Zonenschnitt
+       für alle auf einmal – ohne Python-Overhead pro Aufruf.
+    3. Greedy-Auswahl mit STRtree (O(C · log E) statt O(C · E)):
+       Ein STRtree wird aus den bereits akzeptierten Kanten gebaut und mit
+       predicate='crosses' abgefragt. Neu akzeptierte Kanten sammeln sich in
+       einer Pending-Liste; alle REBUILD_EVERY Einträge wird der Baum neu gebaut.
 
-    Alle Knoten (inkl. Start/End) nehmen teil, sodass keine separate
-    Anbindungslogik für Start/End nötig ist.
+    forbidden_area:
+        Rohe Shapely-Geometrie der vereinigten Sperrzonen (für den Batch-Test).
 
     Rückgabe:
         Liste neuer Kanten-Dicts (edge_id fortlaufend nach existing_edges).
     """
+    REBUILD_EVERY = 100
 
-    # --- Kandidaten sammeln ---
+    # --- Phase 1: Kandidatenpaare sammeln ---
+    # Entfernung aus Koordinaten berechnen – kein LineString-Objekt nötig.
 
-    candidates = []
+    raw = []   # (dist, from_id, to_id, from_pt, to_pt)
 
     for i in range(len(nodes)):
+        from_pt = nodes[i]["geometry"]
+        from_id = nodes[i]["node_id"]
+
         for j in range(i + 1, len(nodes)):
-            from_id = nodes[i]["node_id"]
-            to_id   = nodes[j]["node_id"]
+            to_id = nodes[j]["node_id"]
 
             if frozenset((from_id, to_id)) in connected_pairs:
                 continue
 
-            from_pt  = nodes[i]["geometry"]
-            to_pt    = nodes[j]["geometry"]
-            line     = LineString([from_pt, to_pt])
-            length_m = line.length
+            to_pt = nodes[j]["geometry"]
+            dx    = to_pt.x - from_pt.x
+            dy    = to_pt.y - from_pt.y
+            dist  = sqrt(dx * dx + dy * dy)
 
-            if max_distance_m is not None and length_m > max_distance_m:
+            if max_distance_m is not None and dist > max_distance_m:
                 continue
 
-            if forbidden.intersects(line):
-                continue
+            raw.append((dist, from_id, to_id, from_pt, to_pt))
 
-            candidates.append((length_m, from_id, to_id, line))
+    if not raw:
+        return []
 
-    # Kürzeste zuerst: bei Kreuzungskonflikten werden die kürzeren Kanten bevorzugt.
-    candidates.sort()
+    # --- Phase 2: Linien vektorisiert erzeugen + Zonenschnitt im Batch ---
 
-    # --- Greedy-Auswahl ohne Kreuzungen ---
+    n      = len(raw)
+    all_xy = np.empty((2 * n, 2))
 
-    # Vorhandene Ring-Kanten-Geometrien als Basis für den Kreuzungstest.
-    accepted_geoms = [e["geometry"] for e in existing_edges]
-    new_edges      = []
-    base_id        = len(existing_edges)
+    for k, (_, _, _, fp, tp) in enumerate(raw):
+        all_xy[2 * k]     = (fp.x, fp.y)
+        all_xy[2 * k + 1] = (tp.x, tp.y)
+
+    lines_arr = shapely.linestrings(all_xy, indices=np.repeat(np.arange(n), 2))
+    zone_hit  = shapely.intersects(lines_arr, forbidden_area)
+
+    # --- Phase 3: Kandidaten sortieren (kürzeste zuerst) ---
+
+    candidates = sorted(
+        [(raw[k][0], raw[k][1], raw[k][2], lines_arr[k])
+         for k in range(n) if not zone_hit[k]]
+    )
+
+    # --- Phase 4: Greedy-Auswahl mit STRtree-Kreuzungsfilter ---
+
+    # Ring-Kanten bilden den initialen Bauminhalt.
+    tree_geoms    = [e["geometry"] for e in existing_edges]
+    pending_geoms = []
+    tree          = STRtree(tree_geoms) if tree_geoms else None
+
+    new_edges = []
+    base_id   = len(existing_edges)
 
     for length_m, from_id, to_id, line in candidates:
-        # crosses() prüft echte Kreuzungen (innere Punkte beider Linien).
-        # Gemeinsame Endpunkte geben False zurück – kein manueller Check nötig.
-        if any(line.crosses(g) for g in accepted_geoms):
+        # Baum-Query: O(log E + k), alle echten Kreuzungen auf GEOS-Ebene.
+        # crosses() ignoriert gemeinsame Endpunkte automatisch (DE-9IM).
+        if tree is not None and len(tree.query(line, predicate="crosses")) > 0:
+            continue
+
+        # Pending-Liste: Kanten seit dem letzten Rebuild (max REBUILD_EVERY Stück).
+        if any(line.crosses(g) for g in pending_geoms):
             continue
 
         new_edges.append({
@@ -355,7 +390,12 @@ def _build_visibility_edges(nodes, forbidden, existing_edges, connected_pairs, *
             "orientation":      "visibility",
             "geometry":         line,
         })
-        accepted_geoms.append(line)
+        pending_geoms.append(line)
+
+        if len(pending_geoms) >= REBUILD_EVERY:
+            tree_geoms.extend(pending_geoms)
+            tree          = STRtree(tree_geoms)
+            pending_geoms = []
 
     return new_edges
 
@@ -490,6 +530,7 @@ def create_zone_visibility_graph(
     vis_edges = _build_visibility_edges(
         nodes=nodes,
         forbidden=forbidden,
+        forbidden_area=forbidden_area,
         existing_edges=ring_edges,
         connected_pairs=connected_pairs,
         max_distance_m=max_edge_distance_m,
