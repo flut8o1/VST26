@@ -24,8 +24,8 @@ Algorithmus in vier Schritten:
 
 Performance:
     Schritt 3 ist der dominante Aufwand. Er ist vollständig vektorisiert:
-    - Phase 1 (Kandidaten): numpy-Distanzen über np.triu_indices, Distanz-
-      und connected_pairs-Filter per Bool-Maske – kein Python-Loop.
+    - Phase 1 (Kandidaten): STRtree dwithin-Query liefert nur Paare
+      innerhalb max_distance_m – O(N log N), kein O(N²)-Speicher-Blowup.
     - Phase 2 (Linien + Zonenschnitt): shapely.linestrings() erzeugt alle
       Kandidaten-Linien in einem GEOS-Batch; shapely.intersects() filtert
       Zonenschneider in einem Aufruf.
@@ -298,9 +298,9 @@ def _build_visibility_edges(nodes, forbidden_area, existing_edges, connected_pai
     nicht durch Ring-Kanten verbunden sind.
 
     Vorgehen (vollständig vektorisiert):
-    1. Kandidaten in numpy:
-       Alle Paare (i<j) per np.triu_indices, Distanzen vektorisiert,
-       Filter (max_distance, connected_pairs) per Bool-Maske.
+    1. Kandidaten via STRtree dwithin:
+       Nur Paare innerhalb max_distance_m werden erzeugt – O(N log N),
+       kein O(N²)-Speicher-Blowup. Ohne Distanzlimit: Fehler wenn N zu groß.
     2. Batch-LineStrings + Zonenschnitt:
        shapely.linestrings(coords, indices=...) erzeugt alle Linien in
        einem GEOS-Aufruf; shapely.intersects(lines, forbidden_area)
@@ -331,20 +331,30 @@ def _build_visibility_edges(nodes, forbidden_area, existing_edges, connected_pai
     ys       = np.fromiter((nd["y"]       for nd in nodes), dtype=np.float64, count=n_total)
     node_ids = np.fromiter((nd["node_id"] for nd in nodes), dtype=np.int64,   count=n_total)
 
-    # Alle Paare i<j auf einmal.
-    i_arr, j_arr = np.triu_indices(n_total, k=1)
-
-    # Distanzen vektorisiert berechnen.
-    dx    = xs[j_arr] - xs[i_arr]
-    dy    = ys[j_arr] - ys[i_arr]
-    dists = np.sqrt(dx * dx + dy * dy)
-
-    # Distanzfilter.
     if max_distance_m is not None:
-        m     = dists <= max_distance_m
-        i_arr = i_arr[m]
-        j_arr = j_arr[m]
-        dists = dists[m]
+        # O(N log N): STRtree dwithin – erzeugt nur Paare ≤ max_distance_m,
+        # kein O(N²)-Speicher-Blowup bei großen Graphen.
+        pts     = shapely.points(np.column_stack([xs, ys]))
+        pt_tree = STRtree(pts)
+        raw     = pt_tree.query(pts, predicate="dwithin", distance=max_distance_m)
+        upper   = raw[0] < raw[1]          # i < j, keine Selbst-/Doppelpaare
+        i_arr   = raw[0][upper]
+        j_arr   = raw[1][upper]
+        dx      = xs[j_arr] - xs[i_arr]
+        dy      = ys[j_arr] - ys[i_arr]
+        dists   = np.sqrt(dx * dx + dy * dy)
+    else:
+        # O(N²): nur für kleine Graphen geeignet
+        n_pairs = n_total * (n_total - 1) // 2
+        if n_pairs > 20_000_000:
+            raise MemoryError(
+                f"Zu viele Knotenpaare ({n_pairs:,}) bei unbegrenzter Kantenlänge. "
+                f"Bitte ZONEN_MAX_KANTENLAENGE_M setzen."
+            )
+        i_arr, j_arr = np.triu_indices(n_total, k=1)
+        dx    = xs[j_arr] - xs[i_arr]
+        dy    = ys[j_arr] - ys[i_arr]
+        dists = np.sqrt(dx * dx + dy * dy)
 
     # Filter: Paare, die schon durch Ring-Kanten verbunden sind.
     if connected_pairs:
