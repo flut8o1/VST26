@@ -292,7 +292,7 @@ def _build_ring_edges(rings, node_by_id, forbidden):
 # Schritt 3: Sichtbarkeitskanten erzeugen (kreuzungsfrei)
 # =============================================================================
 
-def _build_visibility_edges(nodes, forbidden_area, existing_edges, connected_pairs, *, max_distance_m):
+def _build_visibility_edges(nodes, forbidden_area, existing_edges, connected_pairs, *, max_distance_m, crossing_free=True):
     """
     Fügt Sichtbarkeitskanten zwischen allen Knotenpaaren hinzu, die noch
     nicht durch Ring-Kanten verbunden sind.
@@ -314,6 +314,12 @@ def _build_visibility_edges(nodes, forbidden_area, existing_edges, connected_pai
        Kürzeste Kanten zuerst; eine Kante wird akzeptiert, wenn keiner
        ihrer Konflikte bereits akzeptiert wurde. Ring-Kanten gelten als
        von Anfang an akzeptiert.
+
+    crossing_free:
+        Wenn True (Standard), wird der kreuzungsfreie Greedy-Filter
+        angewendet (Phasen 3+4). Wenn False, werden ALLE sichtbaren
+        (zonen-freien) Kandidaten als Kanten ausgegeben – dichter
+        Sichtbarkeitsgraph mit Kreuzungen.
 
     forbidden_area:
         Rohe Shapely-Geometrie der vereinigten Sperrzonen (Batch-Test).
@@ -395,6 +401,27 @@ def _build_visibility_edges(nodes, forbidden_area, existing_edges, connected_pai
 
     if len(cand_lines) == 0:
         return []
+
+    # --- Shortcut: alle sichtbaren Kanten ohne Kreuzungs-Filter -----------
+    # Wenn crossing_free=False ist, werden ALLE zonen-freien Kandidaten als
+    # Kanten ausgegeben (dichter Sichtbarkeitsgraph mit Kreuzungen).
+    if not crossing_free:
+        base_id   = len(existing_edges)
+        new_edges = []
+        for k in range(len(cand_lines)):
+            new_edges.append({
+                "edge_id":          base_id + k,
+                "from_node":        int(node_ids[i_arr[k]]),
+                "to_node":          int(node_ids[j_arr[k]]),
+                "length_m":         float(dists[k]),
+                "spacing_m":        None,
+                "diagonal":         None,
+                "connect_diagonal": None,
+                "edge_kind":        "visibility",
+                "orientation":      "visibility",
+                "geometry":         cand_lines[k],
+            })
+        return new_edges
 
     # --- Phase 3: Konflikt-Graph in einem Batch-Query ---------------------
 
@@ -480,18 +507,20 @@ def create_zone_visibility_graph(
     start_lon=None,
     end_lat=None,
     end_lon=None,
+    crossing_free=True,
 ):
     """
-    Erstellt einen kreuzungsfreien Sichtbarkeitsgraphen um LuftVO-Sperrzonen.
+    Erstellt einen Sichtbarkeitsgraphen um LuftVO-Sperrzonen.
 
     Schritte:
     1. Knoten an den Außenecken jeder Sperrzone (offset_m außerhalb).
     2. Ring-Kanten: benachbarte Ecken desselben Polygons verbinden.
-    3. Sichtbarkeitskanten: kürzeste kreuzungsfreie Verbindungen zwischen
-       allen Knoten (inkl. Start/End) hinzufügen.
+    3. Sichtbarkeitskanten: Verbindungen zwischen allen Knoten (inkl.
+       Start/End) hinzufügen. Modus per crossing_free wählbar:
+         - True  (Default): kürzeste, kreuzungsfreie Greedy-Auswahl.
+         - False: ALLE sichtbaren (zonen-freien) Kanten – dichter
+                  Graph mit Kreuzungen.
     4. Ausgabe als GeoJSON.
-
-    Kanten dürfen sich nie kreuzen (kreuzungsfreie Bedingung ist immer aktiv).
 
     Rückgabe:
         (nodes_wgs84, edges_wgs84) – beide als GeoDataFrames in WGS84.
@@ -597,6 +626,7 @@ def create_zone_visibility_graph(
         existing_edges=ring_edges,
         connected_pairs=connected_pairs,
         max_distance_m=max_edge_distance_m,
+        crossing_free=crossing_free,
     )
 
     all_edges = ring_edges + vis_edges
