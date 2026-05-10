@@ -111,8 +111,13 @@ GRAPH_BBOX_PADDING_M = 0
 ZONEN_KNOTEN_ABSTAND_M = 10
 
 # Maximale Kantenlänge in Metern (None = unbegrenzt)
-# Kanten kreuzen sich nie – das ist eine harte Bedingung des Algorithmus.
 ZONEN_MAX_KANTENLAENGE_M = 3000
+
+# Kreuzungsfreier Graph?
+#   True  = kürzeste, kreuzungsfreie Greedy-Auswahl (klassische Variante).
+#   False = ALLE sichtbaren (zonen-freien) Kanten – dichter Graph mit
+#           Kreuzungen, dafür deutlich schneller.
+ZONEN_KREUZUNGSFREI = True
 
 
 # =============================================================================
@@ -294,6 +299,7 @@ def main():
 
             node_offset_m=ZONEN_KNOTEN_ABSTAND_M,
             max_edge_distance_m=ZONEN_MAX_KANTENLAENGE_M,
+            crossing_free=ZONEN_KREUZUNGSFREI,
 
             start_lat=START_LAT,
             start_lon=START_LON,
