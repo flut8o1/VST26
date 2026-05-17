@@ -23,19 +23,24 @@ Algorithmus in vier Schritten:
   4. Speichern als GeoJSON
 
 Performance:
-    Schritt 3 ist der dominante Aufwand. Er ist vollständig vektorisiert:
+    Schritt 3 ist der dominante Aufwand. Er ist vollständig vektorisiert
+    und teilweise parallelisiert:
     - Phase 1 (Kandidaten): STRtree dwithin-Query liefert nur Paare
       innerhalb max_distance_m – O(N log N), kein O(N²)-Speicher-Blowup.
     - Phase 2 (Linien + Zonenschnitt): shapely.linestrings() erzeugt alle
-      Kandidaten-Linien in einem GEOS-Batch; shapely.intersects() filtert
-      Zonenschneider in einem Aufruf.
+      Kandidaten-Linien in einem GEOS-Batch; shapely.prepare() beschleunigt
+      die Intersects-Tests; bei >50 000 Kandidaten werden die Tests in
+      _N_WORKERS Threads parallelisiert (GEOS gibt GIL frei).
     - Phase 3 (Konflikt-Graph): STRtree.query(all_lines, predicate='crosses')
-      liefert ALLE sich kreuzenden Paare in einem einzigen GEOS-Batch-Aufruf
-      (statt N Einzel-Queries mit Python-Overhead).
+      liefert ALLE sich kreuzenden Paare in einem einzigen GEOS-Batch-Aufruf;
+      die Adjazenzliste wird vektorisiert mit numpy-argsort/split gebaut
+      (statt Python-Schleife).
     - Phase 4 (Greedy): Reine Python-Auswahl ohne weitere GEOS-Calls.
     Knoten und Ring-Kanten profitieren weiterhin von prep() (PreparedGeometry).
 """
 
+import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from math import sqrt, cos, sin, pi
 
@@ -45,6 +50,9 @@ import geopandas as gpd
 from shapely import STRtree
 from shapely.geometry import Point, LineString
 from shapely.geometry.polygon import orient
+
+# Parallelitätsgrad für Phase-2-Threading (GEOS gibt GIL frei).
+_N_WORKERS = min(os.cpu_count() or 1, 8)
 
 from utils import (
     WGS84, DEFAULT_METRIC_CRS,
@@ -381,7 +389,7 @@ def _build_visibility_edges(nodes, forbidden_area, existing_edges, connected_pai
     if len(i_arr) == 0:
         return []
 
-    # --- Phase 2: Batch-LineStrings + Zonenschnitt ------------------------
+    # --- Phase 2: Batch-LineStrings + Zonenschnitt (parallelisiert) -------
 
     n_cand            = len(i_arr)
     coords            = np.empty((2 * n_cand, 2), dtype=np.float64)
@@ -391,7 +399,23 @@ def _build_visibility_edges(nodes, forbidden_area, existing_edges, connected_pai
     coords[1::2, 1]   = ys[j_arr]
 
     cand_lines = shapely.linestrings(coords, indices=np.repeat(np.arange(n_cand), 2))
-    zone_hit   = shapely.intersects(cand_lines, forbidden_area)
+
+    # PreparedGeometry macht jeden Einzel-Test ca. 2–10× schneller.
+    # GEOS gibt die GIL während der Intersects-Berechnung frei → echter
+    # Parallel-Speedup mit ThreadPoolExecutor auf Multi-Core-Systemen.
+    shapely.prepare(forbidden_area)
+    try:
+        if n_cand > 50_000 and _N_WORKERS > 1:
+            chunks   = np.array_split(cand_lines, _N_WORKERS)
+            with ThreadPoolExecutor(max_workers=_N_WORKERS) as pool:
+                zone_hit = np.concatenate(list(pool.map(
+                    lambda ch: shapely.intersects(ch, forbidden_area), chunks,
+                )))
+        else:
+            zone_hit = shapely.intersects(cand_lines, forbidden_area)
+    finally:
+        shapely.destroy_prepared(forbidden_area)
+
     keep       = ~zone_hit
 
     cand_lines = cand_lines[keep]
@@ -441,18 +465,23 @@ def _build_visibility_edges(nodes, forbidden_area, existing_edges, connected_pai
     full_tree = STRtree(all_lines)
     pairs     = full_tree.query(all_lines, predicate="crosses")
 
-    # Adjazenzliste der Konflikte pro Linie.
+    # Adjazenzliste der Konflikte pro Linie – vektorisiert mit numpy.
+    # crosses() ist symmetrisch; der Tree-Query liefert beide Richtungen
+    # (a→b und b→a), daher wird jede Richtung separat gespeichert.
     conflicts = [[] for _ in range(n_all)]
     if pairs.size > 0:
-        a_row = pairs[0]
-        b_row = pairs[1]
-        # Nur eine Richtung speichern reicht, weil crosses() symmetrisch ist
-        # und der Tree-Query beide Richtungen liefert.
-        for k in range(pairs.shape[1]):
-            a = int(a_row[k])
-            b = int(b_row[k])
-            if a != b:
-                conflicts[a].append(b)
+        a_row, b_row = pairs[0], pairs[1]
+        mask = a_row != b_row
+        if mask.any():
+            a_fil    = a_row[mask]
+            b_fil    = b_row[mask]
+            sort_idx = np.argsort(a_fil, kind="stable")
+            a_sorted = a_fil[sort_idx]
+            b_sorted = b_fil[sort_idx]
+            bounds   = np.flatnonzero(np.diff(a_sorted)) + 1
+            for ga, gb in zip(np.split(a_sorted, bounds),
+                              np.split(b_sorted, bounds)):
+                conflicts[int(ga[0])] = gb.tolist()
 
     # --- Phase 4: Greedy-Auswahl rein in Python (kein GEOS mehr) ----------
 
@@ -508,6 +537,7 @@ def create_zone_visibility_graph(
     end_lat=None,
     end_lon=None,
     crossing_free=True,
+    bbox_wgs84=None,
 ):
     """
     Erstellt einen Sichtbarkeitsgraphen um LuftVO-Sperrzonen.
@@ -563,6 +593,27 @@ def create_zone_visibility_graph(
 
     if not nodes:
         raise ValueError("Es konnten keine Knoten aus Zonenecken erzeugt werden.")
+
+    # Optional: Knoten auf den sichtbaren Bereich (PNG-Ausschnitt) begrenzen.
+    # Start/End werden NACH dieser Filterung hinzugefügt und sind immer gültig.
+    if bbox_wgs84 is not None:
+        _sw = wgs84_to_metric(bbox_wgs84[0], bbox_wgs84[1], metric_crs)
+        _ne = wgs84_to_metric(bbox_wgs84[2], bbox_wgs84[3], metric_crs)
+        _valid = {
+            nd["node_id"]
+            for nd in nodes
+            if _sw.x <= nd["x"] <= _ne.x and _sw.y <= nd["y"] <= _ne.y
+        }
+        nodes = [nd for nd in nodes if nd["node_id"] in _valid]
+        rings = [
+            [nid if (nid is None or nid in _valid) else None for nid in ring]
+            for ring in rings
+        ]
+        if not nodes:
+            raise ValueError(
+                "Keine Zonenknoten innerhalb des PNG-Ausschnitts. "
+                "PNG_SQUARE_SIDE_KM vergrößern oder PNG_CENTER_LAT/LON anpassen."
+            )
 
     # ==========================================================================
     # Schritt 2: Start- und Endknoten hinzufügen
