@@ -1,11 +1,10 @@
 """
 main.py – Einstiegspunkt der Drohnen-Routenplanung (LuftVO-konform).
 
-Gesamte Pipeline in vier Schritten:
+Gesamte Pipeline in drei Schritten:
     1. GeoJSON bearbeiten  – OSM-Daten klassifizieren und LuftVO-Zonen puffern.
-    2. Graph erstellen     – Navigationsnetz (Gitter oder Sichtbarkeitsgraph) aufbauen.
+    2. Graph erstellen     – Navigationsnetz (Gitter) aufbauen.
     3. Wegsuche            – Kürzesten Weg mit Dijkstra oder A* finden.
-    4. Karten (optional)   – Zonenkarte und/oder Graphkarte als PNG/HTML ausgeben.
 
 Alle Einstellungen befinden sich ausschließlich in den Konfigurations-
 abschnitten direkt unterhalb dieser Modulbeschreibung.
@@ -18,10 +17,7 @@ from math import cos, radians
 import io
 
 from GeoJSON_Bearbeiten import create_luftvo_buffer_geojson
-from geoJSON_viewer import create_geojson_visualization
 from graph_erstellen import create_navigation_graph as create_grid_graph
-from Graph_erstellen_Zonen import create_zone_visibility_graph
-from graph_viewer import create_graph_png_map
 from Wegfindungs import find_path_and_visualize
 
 
@@ -43,31 +39,8 @@ OUTPUT_GRAPH_EDGES_NAME = "graph_edges.geojson"
 OUTPUT_ROUTE_NODES_NAME = "route_nodes.geojson"
 OUTPUT_ROUTE_EDGES_NAME = "route_edges.geojson"
 
-# Ausgabe: Karten als Dateien
-OUTPUT_ZONES_MAP_HTML_NAME           = "drohnen_luftvo_karte.html"
-OUTPUT_ZONES_MAP_PNG_NAME            = "drohnen_luftvo_karte.png"
-OUTPUT_GRAPH_MAP_PNG_NAME            = "graph_karte.png"
-OUTPUT_GRAPH_MAP_WITH_ZONES_PNG_NAME = "graph_karte_mit_zonen.png"
-OUTPUT_ROUTE_MAP_PNG_NAME            = "route_karte.png"
-
-
-# =============================================================================
-# Karten-Ausgabeformat
-# =============================================================================
-
-# "png" oder "html" – gilt für die Zonenübersichtskarte
-OUTPUT_FORMAT = "png"
-
-
-# =============================================================================
-# Zonenvorschaukarte
-# =============================================================================
-
-# True = Zonenübersichtskarte erzeugen
-ZONEN_KARTE_ERSTELLEN = False
-
-# True = Karte nach Erzeugung öffnen / anzeigen
-ZONEN_KARTE_ANZEIGEN  = False
+# Ausgabe: Routenkarte
+OUTPUT_ROUTE_MAP_PNG_NAME = "route_karte.png"
 
 
 # =============================================================================
@@ -82,16 +55,7 @@ ZONE_BUFFER_RESOLUTION = 8
 
 
 # =============================================================================
-# Netztyp
-# =============================================================================
-
-# "grid"  = regelmäßiges Rechteckgitter (schnell, einfach)
-# "zonen" = Sichtbarkeitsgraph mit Knoten an Zonenecken (kompakter, präziser)
-NETZ_TYP = "grid"
-
-
-# =============================================================================
-# Gitter-Netz-Einstellungen (nur bei NETZ_TYP = "grid")
+# Gitter-Netz-Einstellungen
 # =============================================================================
 
 # Abstand der Gitterknoten in Metern
@@ -102,23 +66,6 @@ DIAGONALE_VERBINDUNGEN = False
 
 # Zusätzlicher Rand um die Bounding Box der Zonen in Metern (0 = kein Rand)
 GRAPH_BBOX_PADDING_M = 0
-
-
-# =============================================================================
-# Zonen-Netz-Einstellungen (nur bei NETZ_TYP = "zonen")
-# =============================================================================
-
-# Abstand der Knoten von jeder Zonenecke in Metern
-ZONEN_KNOTEN_ABSTAND_M = 10
-
-# Maximale Kantenlänge in Metern (None = unbegrenzt)
-ZONEN_MAX_KANTENLAENGE_M = 3000
-
-# Kreuzungsfreier Graph?
-#   True  = kürzeste, kreuzungsfreie Greedy-Auswahl (klassische Variante).
-#   False = ALLE sichtbaren (zonen-freien) Kanten – dichter Graph mit
-#           Kreuzungen, dafür deutlich schneller.
-ZONEN_KREUZUNGSFREI = True
 
 
 # =============================================================================
@@ -134,21 +81,7 @@ END_LAT = 48.07276903757395
 END_LON = 11.637402988925738
 
 # Anzahl der Verbindungen, die Start/End mit dem Graphen erhalten
-# (nur beim Gitter-Netz; beim Zonen-Netz wird jeder sichtbare Knoten verbunden)
 START_END_VERBINDUNGEN_PRO_PUNKT = 5
-
-
-# =============================================================================
-# Graphkarten (optional)
-# =============================================================================
-
-# Graphkarte ohne Sperrzonen
-GRAPH_KARTE_ERSTELLEN  = False
-GRAPH_KARTE_ANZEIGEN   = False
-
-# Graphkarte mit Sperrzonen
-GRAPH_KARTE_MIT_ZONEN_ERSTELLEN = False
-GRAPH_KARTE_MIT_ZONEN_ANZEIGEN  = False
 
 
 # =============================================================================
@@ -223,29 +156,13 @@ def main():
     base_dir = Path(__file__).parent
 
     # Alle Pfade relativ zum Skript-Verzeichnis aufbauen.
-    input_geojson                = base_dir / INPUT_GEOJSON_NAME
-    output_zones_geojson         = base_dir / OUTPUT_ZONES_GEOJSON_NAME
-    output_graph_nodes           = base_dir / OUTPUT_GRAPH_NODES_NAME
-    output_graph_edges           = base_dir / OUTPUT_GRAPH_EDGES_NAME
-    output_graph_map_png         = base_dir / OUTPUT_GRAPH_MAP_PNG_NAME
-    output_graph_map_with_zones  = base_dir / OUTPUT_GRAPH_MAP_WITH_ZONES_PNG_NAME
-    output_route_nodes           = base_dir / OUTPUT_ROUTE_NODES_NAME
-    output_route_edges           = base_dir / OUTPUT_ROUTE_EDGES_NAME
-    output_route_map             = base_dir / OUTPUT_ROUTE_MAP_PNG_NAME
-
-    output_format = OUTPUT_FORMAT.lower().strip()
-
-    if output_format == "html":
-        output_zones_map = base_dir / OUTPUT_ZONES_MAP_HTML_NAME
-    elif output_format == "png":
-        output_zones_map = base_dir / OUTPUT_ZONES_MAP_PNG_NAME
-    else:
-        raise ValueError("OUTPUT_FORMAT muss 'html' oder 'png' sein.")
-
-    netz_typ = NETZ_TYP.lower().strip()
-
-    if netz_typ not in {"grid", "zonen"}:
-        raise ValueError("NETZ_TYP muss 'grid' oder 'zonen' sein.")
+    input_geojson        = base_dir / INPUT_GEOJSON_NAME
+    output_zones_geojson = base_dir / OUTPUT_ZONES_GEOJSON_NAME
+    output_graph_nodes   = base_dir / OUTPUT_GRAPH_NODES_NAME
+    output_graph_edges   = base_dir / OUTPUT_GRAPH_EDGES_NAME
+    output_route_nodes   = base_dir / OUTPUT_ROUTE_NODES_NAME
+    output_route_edges   = base_dir / OUTPUT_ROUTE_EDGES_NAME
+    output_route_map     = base_dir / OUTPUT_ROUTE_MAP_PNG_NAME
 
     # Bounding Box des PNG-Ausschnitts als harte Graph-Grenze berechnen.
     # Ist PNG_FESTER_AUSSCHNITT oder GRAPH_AUF_PNG_BEGRENZEN deaktiviert,
@@ -301,42 +218,22 @@ def main():
 
     start = perf_counter()
 
-    if netz_typ == "grid":
-        nodes, edges = create_grid_graph(
-            zones_geojson=output_zones_geojson,
-            output_nodes_geojson=output_graph_nodes,
-            output_edges_geojson=output_graph_edges,
+    nodes, edges = create_grid_graph(
+        zones_geojson=output_zones_geojson,
+        output_nodes_geojson=output_graph_nodes,
+        output_edges_geojson=output_graph_edges,
 
-            spacing_m=NETZ_AUFLOESUNG_M,
-            connect_diagonal=DIAGONALE_VERBINDUNGEN,
-            bbox_padding_m=GRAPH_BBOX_PADDING_M,
-            max_bbox_wgs84=graph_bbox_wgs84,
+        spacing_m=NETZ_AUFLOESUNG_M,
+        connect_diagonal=DIAGONALE_VERBINDUNGEN,
+        bbox_padding_m=GRAPH_BBOX_PADDING_M,
+        max_bbox_wgs84=graph_bbox_wgs84,
 
-            start_lat=START_LAT,
-            start_lon=START_LON,
-            end_lat=END_LAT,
-            end_lon=END_LON,
-            special_connections_per_point=START_END_VERBINDUNGEN_PRO_PUNKT,
-        )
-        netz_text = "Grid"
-
-    else:
-        nodes, edges = create_zone_visibility_graph(
-            zones_geojson=output_zones_geojson,
-            output_nodes_geojson=output_graph_nodes,
-            output_edges_geojson=output_graph_edges,
-
-            node_offset_m=ZONEN_KNOTEN_ABSTAND_M,
-            max_edge_distance_m=ZONEN_MAX_KANTENLAENGE_M,
-            crossing_free=ZONEN_KREUZUNGSFREI,
-            bbox_wgs84=graph_bbox_wgs84,
-
-            start_lat=START_LAT,
-            start_lon=START_LON,
-            end_lat=END_LAT,
-            end_lon=END_LON,
-        )
-        netz_text = "Zonen"
+        start_lat=START_LAT,
+        start_lon=START_LON,
+        end_lat=END_LAT,
+        end_lon=END_LON,
+        special_connections_per_point=START_END_VERBINDUNGEN_PRO_PUNKT,
+    )
 
     _print_done("Graph erstellen", perf_counter() - start)
 
@@ -374,63 +271,6 @@ def main():
         loesungs_laufzeit_s = perf_counter() - start
 
     # -------------------------------------------------------------------------
-    # Schritt 4a: LuftVO-Zonenkarte (optional)
-    # -------------------------------------------------------------------------
-
-    if ZONEN_KARTE_ERSTELLEN:
-        create_geojson_visualization(
-            input_geojson=output_zones_geojson,
-            output_path=output_zones_map,
-            output_format=output_format,
-            open_in_browser=ZONEN_KARTE_ANZEIGEN,
-            show_png=ZONEN_KARTE_ANZEIGEN,
-            satellite_background=SATELLITE_BACKGROUND,
-            basemap_zoom=BASEMAP_ZOOM,
-            fixed_png_extent=PNG_FESTER_AUSSCHNITT,
-            png_center_lat=PNG_CENTER_LAT,
-            png_center_lon=PNG_CENTER_LON,
-            png_square_side_km=PNG_SQUARE_SIDE_KM,
-        )
-
-    # -------------------------------------------------------------------------
-    # Schritt 4b: Graphkarte ohne Zonen (optional)
-    # -------------------------------------------------------------------------
-
-    if GRAPH_KARTE_ERSTELLEN:
-        create_graph_png_map(
-            nodes_geojson=output_graph_nodes,
-            edges_geojson=output_graph_edges,
-            zones_geojson=None,
-            output_png=output_graph_map_png,
-            show_map=GRAPH_KARTE_ANZEIGEN,
-            satellite_background=SATELLITE_BACKGROUND,
-            basemap_zoom=BASEMAP_ZOOM,
-            fixed_extent=PNG_FESTER_AUSSCHNITT,
-            center_lat=PNG_CENTER_LAT,
-            center_lon=PNG_CENTER_LON,
-            square_side_km=PNG_SQUARE_SIDE_KM,
-        )
-
-    # -------------------------------------------------------------------------
-    # Schritt 4c: Graphkarte mit Zonen (optional)
-    # -------------------------------------------------------------------------
-
-    if GRAPH_KARTE_MIT_ZONEN_ERSTELLEN:
-        create_graph_png_map(
-            nodes_geojson=output_graph_nodes,
-            edges_geojson=output_graph_edges,
-            zones_geojson=output_zones_geojson,
-            output_png=output_graph_map_with_zones,
-            show_map=GRAPH_KARTE_MIT_ZONEN_ANZEIGEN,
-            satellite_background=SATELLITE_BACKGROUND,
-            basemap_zoom=BASEMAP_ZOOM,
-            fixed_extent=PNG_FESTER_AUSSCHNITT,
-            center_lat=PNG_CENTER_LAT,
-            center_lon=PNG_CENTER_LON,
-            square_side_km=PNG_SQUARE_SIDE_KM,
-        )
-
-    # -------------------------------------------------------------------------
     # Abschlussinformationen
     # -------------------------------------------------------------------------
 
@@ -451,15 +291,11 @@ def main():
     print("=" * 77)
     print("ZUSAMMENFASSUNG")
     print("=" * 77)
-    print(f"Netz generiert:               {netz_text}")
     print(f"Knoten erzeugt:               {len(nodes)}")
     print(f"Kanten erzeugt:               {len(edges)}")
     print()
     print("KARTEN:")
     print(f"  Satellitenhintergrund:        {_ja_nein(SATELLITE_BACKGROUND)}")
-    print(f"  Zonenkarte:                   {_ja_nein(ZONEN_KARTE_ERSTELLEN)}")
-    print(f"  Graphkarte:                   {_ja_nein(GRAPH_KARTE_ERSTELLEN)}")
-    print(f"  Graphkarte mit Zonen:         {_ja_nein(GRAPH_KARTE_MIT_ZONEN_ERSTELLEN)}")
     print()
     print("LÖSUNG:")
     print(f"  Algorithmus:                  {algorithmus_text}")
