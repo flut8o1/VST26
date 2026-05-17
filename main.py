@@ -1,13 +1,7 @@
 """
-main.py – Einstiegspunkt der Drohnen-Routenplanung (LuftVO-konform).
+main.py – Drohnen-Routenplanung (LuftVO-konform).
 
-Gesamte Pipeline in drei Schritten:
-    1. GeoJSON bearbeiten  – OSM-Daten klassifizieren und LuftVO-Zonen puffern.
-    2. Graph erstellen     – Navigationsnetz (Gitter) aufbauen.
-    3. Wegsuche            – Kürzesten Weg mit Dijkstra oder A* finden.
-
-Alle Einstellungen befinden sich ausschließlich in den Konfigurations-
-abschnitten direkt unterhalb dieser Modulbeschreibung.
+Pipeline: GeoJSON puffern → Gittergraph → Wegsuche → Routenkarte.
 """
 
 from pathlib import Path
@@ -22,35 +16,18 @@ from Wegfindungs import find_path_and_visualize
 
 
 # =============================================================================
-# Eingabe- und Ausgabedateien
+# Eingabe / Ausgabe
 # =============================================================================
 
-# Eingabe: OSM-GeoJSON (z. B. aus Overpass-Abfrage)
-INPUT_GEOJSON_NAME = "GeoDaten_ohne_Naturschutz.geojson"
-
-# Ausgabe: gepufferte LuftVO-Sperrzonen
-OUTPUT_ZONES_GEOJSON_NAME = "drohnen_luftvo_zonen.geojson"
-
-# Ausgabe: Graphknoten und -kanten
-OUTPUT_GRAPH_NODES_NAME = "graph_nodes.geojson"
-OUTPUT_GRAPH_EDGES_NAME = "graph_edges.geojson"
-
-# Ausgabe: gefundene Route
-OUTPUT_ROUTE_NODES_NAME = "route_nodes.geojson"
-OUTPUT_ROUTE_EDGES_NAME = "route_edges.geojson"
-
-# Ausgabe: Routenkarte
-OUTPUT_ROUTE_MAP_PNG_NAME = "route_karte.png"
+INPUT_GEOJSON_NAME    = "GeoDaten_ohne_Naturschutz.geojson"
+OUTPUT_ROUTE_MAP_NAME = "route_karte.png"
 
 
 # =============================================================================
-# Puffer-Einstellungen (GeoJSON_Bearbeiten.py)
+# Puffer-Einstellungen
 # =============================================================================
 
-# Anzahl der Ecken für Punkt-Polygone (höher = runder)
-POLYGON_ECKEN_N = 8
-
-# Rundheit der Puffer um bestehende Flächen/Linien (höher = runder)
+POLYGON_ECKEN_N        = 8
 ZONE_BUFFER_RESOLUTION = 8
 
 
@@ -58,29 +35,21 @@ ZONE_BUFFER_RESOLUTION = 8
 # Gitter-Netz-Einstellungen
 # =============================================================================
 
-# Abstand der Gitterknoten in Metern
-NETZ_AUFLOESUNG_M = 250
-
-# True = zusätzlich diagonale Nachbarknoten verbinden
-DIAGONALE_VERBINDUNGEN = False
-
-# Zusätzlicher Rand um die Bounding Box der Zonen in Metern (0 = kein Rand)
-GRAPH_BBOX_PADDING_M = 0
+NETZ_AUFLOESUNG_M              = 250
+DIAGONALE_VERBINDUNGEN         = False
+GRAPH_BBOX_PADDING_M           = 0
 
 
 # =============================================================================
 # Start- und Endpunkt
 # =============================================================================
 
-# Startpunkt in WGS84 (Breitengrad, Längengrad)
 START_LAT = 48.14018493850112
 START_LON = 11.56075451365665
 
-# Endpunkt in WGS84
 END_LAT = 48.07276903757395
 END_LON = 11.637402988925738
 
-# Anzahl der Verbindungen, die Start/End mit dem Graphen erhalten
 START_END_VERBINDUNGEN_PRO_PUNKT = 5
 
 
@@ -88,13 +57,8 @@ START_END_VERBINDUNGEN_PRO_PUNKT = 5
 # Wegsuche
 # =============================================================================
 
-# True = Wegsuche durchführen und Ergebnis speichern
-WEGSUCHE_AUSFUEHREN = True
-
-# "dijkstra" oder "astar"
-WEGSUCHE_ALGORITHMUS = "astar"
-
-# True = Routenkarte nach Erzeugung anzeigen
+WEGSUCHE_AUSFUEHREN     = True
+WEGSUCHE_ALGORITHMUS    = "astar"
 WEGSUCHE_KARTE_ANZEIGEN = True
 
 
@@ -102,20 +66,12 @@ WEGSUCHE_KARTE_ANZEIGEN = True
 # Kartenhintergrund und Ausschnitt
 # =============================================================================
 
-# True = Satellitenbilder (Esri World Imagery) als Hintergrund laden
-SATELLITE_BACKGROUND = True
+SATELLITE_BACKGROUND  = True
+BASEMAP_ZOOM          = 13
 
-# Zoom-Stufe für den Kachel-Hintergrund (höher = mehr Detail, langsamer)
-BASEMAP_ZOOM = 13
-
-# Mittelpunkt des festen PNG-Ausschnitts in WGS84
-PNG_CENTER_LAT = 48.1085
-PNG_CENTER_LON = 11.5953
-
-# Seitenlänge des quadratischen Ausschnitts in Kilometern
-PNG_SQUARE_SIDE_KM = 15
-
-# True = fester Ausschnitt (oben), False = Ausschnitt aus Datengrenzen
+PNG_CENTER_LAT        = 48.1085
+PNG_CENTER_LON        = 11.5953
+PNG_SQUARE_SIDE_KM    = 15
 PNG_FESTER_AUSSCHNITT = True
 
 
@@ -124,8 +80,6 @@ PNG_FESTER_AUSSCHNITT = True
 # =============================================================================
 
 # True = Graph wird auf den PNG-Ausschnitt begrenzt.
-# Knoten außerhalb des sichtbaren Quadrats werden nicht erzeugt, sodass der
-# Algorithmus keine Route außerhalb des Ausschnitts finden kann.
 # Hat nur Wirkung wenn PNG_FESTER_AUSSCHNITT = True.
 GRAPH_AUF_PNG_BEGRENZEN = True
 
@@ -135,12 +89,10 @@ GRAPH_AUF_PNG_BEGRENZEN = True
 # =============================================================================
 
 def _ja_nein(value):
-    """Gibt 'Ja' oder 'Nein' für boolesche Werte zurück."""
     return "Ja" if value else "Nein"
 
 
 def _print_done(name, laufzeit_s):
-    """Gibt den Abschluss eines Schritts mit Laufzeit auf der Konsole aus."""
     print(f"{name}: Done")
     print(f"Laufzeit: {laufzeit_s:.3f} s")
     print()
@@ -155,18 +107,6 @@ def main():
 
     base_dir = Path(__file__).parent
 
-    # Alle Pfade relativ zum Skript-Verzeichnis aufbauen.
-    input_geojson        = base_dir / INPUT_GEOJSON_NAME
-    output_zones_geojson = base_dir / OUTPUT_ZONES_GEOJSON_NAME
-    output_graph_nodes   = base_dir / OUTPUT_GRAPH_NODES_NAME
-    output_graph_edges   = base_dir / OUTPUT_GRAPH_EDGES_NAME
-    output_route_nodes   = base_dir / OUTPUT_ROUTE_NODES_NAME
-    output_route_edges   = base_dir / OUTPUT_ROUTE_EDGES_NAME
-    output_route_map     = base_dir / OUTPUT_ROUTE_MAP_PNG_NAME
-
-    # Bounding Box des PNG-Ausschnitts als harte Graph-Grenze berechnen.
-    # Ist PNG_FESTER_AUSSCHNITT oder GRAPH_AUF_PNG_BEGRENZEN deaktiviert,
-    # bleibt graph_bbox_wgs84 None und der Graph wird nicht beschnitten.
     if PNG_FESTER_AUSSCHNITT and GRAPH_AUF_PNG_BEGRENZEN:
         _half   = PNG_SQUARE_SIDE_KM / 2.0
         _dlat   = _half / 111.32
@@ -181,15 +121,14 @@ def main():
         graph_bbox_wgs84 = None
 
     # -------------------------------------------------------------------------
-    # Schritt 1: GeoJSON bearbeiten – OSM-Daten klassifizieren und puffern
+    # Schritt 1: GeoJSON bearbeiten
     # -------------------------------------------------------------------------
 
     start = perf_counter()
 
-    zones = create_luftvo_buffer_geojson(
-        input_geojson=input_geojson,
-        output_geojson=output_zones_geojson,
-
+    create_luftvo_buffer_geojson(
+        input_geojson=base_dir / INPUT_GEOJSON_NAME,
+        output_geojson=base_dir / "drohnen_luftvo_zonen.geojson",
         hospital_radius_m=100,
         police_radius_m=100,
         prison_radius_m=100,
@@ -201,11 +140,8 @@ def main():
         airport_radius_m=1000,
         aerodrome_radius_m=1500,
         airstrip_heliport_radius_m=1500,
-
-        # Schutzgebiete bereits als Fläche – kein zusätzlicher Puffer.
         nature_protection_radius_m=0,
         landscape_protection_radius_m=0,
-
         polygon_corners=POLYGON_ECKEN_N,
         zone_buffer_resolution=ZONE_BUFFER_RESOLUTION,
     )
@@ -213,21 +149,19 @@ def main():
     _print_done("GeoJSON bearbeiten", perf_counter() - start)
 
     # -------------------------------------------------------------------------
-    # Schritt 2: Graph erstellen – Navigationsnetz aufbauen
+    # Schritt 2: Graph erstellen
     # -------------------------------------------------------------------------
 
     start = perf_counter()
 
     nodes, edges = create_grid_graph(
-        zones_geojson=output_zones_geojson,
-        output_nodes_geojson=output_graph_nodes,
-        output_edges_geojson=output_graph_edges,
-
+        zones_geojson=base_dir / "drohnen_luftvo_zonen.geojson",
+        output_nodes_geojson=base_dir / "graph_nodes.geojson",
+        output_edges_geojson=base_dir / "graph_edges.geojson",
         spacing_m=NETZ_AUFLOESUNG_M,
         connect_diagonal=DIAGONALE_VERBINDUNGEN,
         bbox_padding_m=GRAPH_BBOX_PADDING_M,
         max_bbox_wgs84=graph_bbox_wgs84,
-
         start_lat=START_LAT,
         start_lon=START_LON,
         end_lat=END_LAT,
@@ -238,7 +172,7 @@ def main():
     _print_done("Graph erstellen", perf_counter() - start)
 
     # -------------------------------------------------------------------------
-    # Schritt 3: Wegsuche – kürzesten Weg finden
+    # Schritt 3: Wegsuche
     # -------------------------------------------------------------------------
 
     loesungs_laufzeit_s = None
@@ -247,16 +181,14 @@ def main():
     if WEGSUCHE_AUSFUEHREN:
         start = perf_counter()
 
-        # Verbose-Ausgaben aus Wegfindungs.py unterdrücken – Zusammenfassung
-        # erfolgt im Abschnitt "Abschlussinformationen" weiter unten.
         with redirect_stdout(io.StringIO()):
             route_result = find_path_and_visualize(
-                nodes_geojson=output_graph_nodes,
-                edges_geojson=output_graph_edges,
-                zones_geojson=output_zones_geojson,
-                output_route_nodes_geojson=output_route_nodes,
-                output_route_edges_geojson=output_route_edges,
-                output_png=output_route_map,
+                nodes_geojson=base_dir / "graph_nodes.geojson",
+                edges_geojson=base_dir / "graph_edges.geojson",
+                zones_geojson=base_dir / "drohnen_luftvo_zonen.geojson",
+                output_route_nodes_geojson=base_dir / "route_nodes.geojson",
+                output_route_edges_geojson=base_dir / "route_edges.geojson",
+                output_png=base_dir / OUTPUT_ROUTE_MAP_NAME,
                 algorithm=WEGSUCHE_ALGORITHMUS,
                 directed=False,
                 show_map=WEGSUCHE_KARTE_ANZEIGEN,
@@ -277,11 +209,8 @@ def main():
     gesamte_laufzeit_s = perf_counter() - gesamte_laufzeit_start
 
     if route_result is not None:
-        algorithmus_text      = "AStar" if route_result["algorithm"] == "astar" else "Dijkstra"
-        laenge_text           = (
-            f"{route_result['route_length_m']:.2f} m / "
-            f"{route_result['route_length_km']:.3f} km"
-        )
+        algorithmus_text       = "AStar" if route_result["algorithm"] == "astar" else "Dijkstra"
+        laenge_text            = f"{route_result['route_length_m']:.2f} m / {route_result['route_length_km']:.3f} km"
         loesungs_laufzeit_text = f"{loesungs_laufzeit_s:.3f} s"
     else:
         algorithmus_text       = "-"
