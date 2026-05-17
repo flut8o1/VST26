@@ -145,6 +145,7 @@ def create_navigation_graph(
     metric_crs=DEFAULT_METRIC_CRS,
     connect_diagonal=False,
     bbox_padding_m=0,
+    max_bbox_wgs84=None,
     start_lat=None,
     start_lon=None,
     end_lat=None,
@@ -230,6 +231,15 @@ def create_navigation_graph(
     miny -= bbox_padding_m
     maxx += bbox_padding_m
     maxy += bbox_padding_m
+
+    # Optional: Gitter auf den sichtbaren PNG-Ausschnitt begrenzen.
+    if max_bbox_wgs84 is not None:
+        _sw = wgs84_to_metric(max_bbox_wgs84[0], max_bbox_wgs84[1], metric_crs)
+        _ne = wgs84_to_metric(max_bbox_wgs84[2], max_bbox_wgs84[3], metric_crs)
+        minx = max(minx, _sw.x)
+        miny = max(miny, _sw.y)
+        maxx = min(maxx, _ne.x)
+        maxy = min(maxy, _ne.y)
 
     # ==========================================================================
     # Schritt 1: Gitterknoten erzeugen
