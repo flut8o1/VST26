@@ -14,6 +14,7 @@ abschnitten direkt unterhalb dieser Modulbeschreibung.
 from pathlib import Path
 from time import perf_counter
 from contextlib import redirect_stdout
+from math import cos, radians
 import io
 
 from GeoJSON_Bearbeiten import create_luftvo_buffer_geojson
@@ -186,6 +187,17 @@ PNG_FESTER_AUSSCHNITT = True
 
 
 # =============================================================================
+# Graph-Begrenzung auf den sichtbaren Bereich
+# =============================================================================
+
+# True = Graph wird auf den PNG-Ausschnitt begrenzt.
+# Knoten außerhalb des sichtbaren Quadrats werden nicht erzeugt, sodass der
+# Algorithmus keine Route außerhalb des Ausschnitts finden kann.
+# Hat nur Wirkung wenn PNG_FESTER_AUSSCHNITT = True.
+GRAPH_AUF_PNG_BEGRENZEN = True
+
+
+# =============================================================================
 # Hilfsfunktionen
 # =============================================================================
 
@@ -235,6 +247,22 @@ def main():
     if netz_typ not in {"grid", "zonen"}:
         raise ValueError("NETZ_TYP muss 'grid' oder 'zonen' sein.")
 
+    # Bounding Box des PNG-Ausschnitts als harte Graph-Grenze berechnen.
+    # Ist PNG_FESTER_AUSSCHNITT oder GRAPH_AUF_PNG_BEGRENZEN deaktiviert,
+    # bleibt graph_bbox_wgs84 None und der Graph wird nicht beschnitten.
+    if PNG_FESTER_AUSSCHNITT and GRAPH_AUF_PNG_BEGRENZEN:
+        _half   = PNG_SQUARE_SIDE_KM / 2.0
+        _dlat   = _half / 111.32
+        _dlon   = _half / (111.32 * cos(radians(PNG_CENTER_LAT)))
+        graph_bbox_wgs84 = (
+            PNG_CENTER_LAT - _dlat,
+            PNG_CENTER_LON - _dlon,
+            PNG_CENTER_LAT + _dlat,
+            PNG_CENTER_LON + _dlon,
+        )
+    else:
+        graph_bbox_wgs84 = None
+
     # -------------------------------------------------------------------------
     # Schritt 1: GeoJSON bearbeiten – OSM-Daten klassifizieren und puffern
     # -------------------------------------------------------------------------
@@ -282,6 +310,7 @@ def main():
             spacing_m=NETZ_AUFLOESUNG_M,
             connect_diagonal=DIAGONALE_VERBINDUNGEN,
             bbox_padding_m=GRAPH_BBOX_PADDING_M,
+            max_bbox_wgs84=graph_bbox_wgs84,
 
             start_lat=START_LAT,
             start_lon=START_LON,
@@ -300,6 +329,7 @@ def main():
             node_offset_m=ZONEN_KNOTEN_ABSTAND_M,
             max_edge_distance_m=ZONEN_MAX_KANTENLAENGE_M,
             crossing_free=ZONEN_KREUZUNGSFREI,
+            bbox_wgs84=graph_bbox_wgs84,
 
             start_lat=START_LAT,
             start_lon=START_LON,
