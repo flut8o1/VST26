@@ -537,6 +537,7 @@ def create_zone_visibility_graph(
     end_lat=None,
     end_lon=None,
     crossing_free=True,
+    bbox_wgs84=None,
 ):
     """
     Erstellt einen Sichtbarkeitsgraphen um LuftVO-Sperrzonen.
@@ -592,6 +593,27 @@ def create_zone_visibility_graph(
 
     if not nodes:
         raise ValueError("Es konnten keine Knoten aus Zonenecken erzeugt werden.")
+
+    # Optional: Knoten auf den sichtbaren Bereich (PNG-Ausschnitt) begrenzen.
+    # Start/End werden NACH dieser Filterung hinzugefügt und sind immer gültig.
+    if bbox_wgs84 is not None:
+        _sw = wgs84_to_metric(bbox_wgs84[0], bbox_wgs84[1], metric_crs)
+        _ne = wgs84_to_metric(bbox_wgs84[2], bbox_wgs84[3], metric_crs)
+        _valid = {
+            nd["node_id"]
+            for nd in nodes
+            if _sw.x <= nd["x"] <= _ne.x and _sw.y <= nd["y"] <= _ne.y
+        }
+        nodes = [nd for nd in nodes if nd["node_id"] in _valid]
+        rings = [
+            [nid if (nid is None or nid in _valid) else None for nid in ring]
+            for ring in rings
+        ]
+        if not nodes:
+            raise ValueError(
+                "Keine Zonenknoten innerhalb des PNG-Ausschnitts. "
+                "PNG_SQUARE_SIDE_KM vergrößern oder PNG_CENTER_LAT/LON anpassen."
+            )
 
     # ==========================================================================
     # Schritt 2: Start- und Endknoten hinzufügen
