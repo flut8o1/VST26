@@ -1,3 +1,13 @@
+"""
+GeoJSON_Bearbeiten.py – Klassifizierung und Pufferung von LuftVO-Zonen.
+
+Liest OSM-Rohdaten (GeoJSON, z. B. aus Overpass) ein, klassifiziert jedes
+Feature anhand seiner OSM-Tags und erzeugt daraus gepufferte No-Fly-Zones
+gemäß der deutschen Luftverkehrs-Ordnung (LuftVO).
+
+Ausgabe: GeoJSON mit Polygon-Geometrien, bereit für die Graph-Erstellung.
+"""
+
 from pathlib import Path
 from math import cos, sin, pi
 
@@ -7,22 +17,48 @@ from shapely.geometry import Polygon, MultiPolygon
 from utils import WGS84, DEFAULT_METRIC_CRS
 
 
+# =============================================================================
+# OSM-Tag-Normalisierung
+# =============================================================================
+
 def _norm(value):
+    """Normalisiert einen OSM-Tag-Wert zu Kleinbuchstaben ohne Leerzeichen."""
     if value is None:
         return ""
     return str(value).strip().lower()
 
 
 def _get_tag(props, key):
+    """
+    Liest einen OSM-Tag robust aus den Feature-Properties.
+
+    Unterstützt sowohl flache GeoJSON-Properties als auch verschachtelte
+    Tags-Objekte, wie sie manche Overpass-Exporte erzeugen.
+    """
     if key in props:
         return props.get(key)
+
+    # Einige Overpass-Exporte bündeln alle Tags unter einem "tags"-Schlüssel.
     tags = props.get("tags")
     if isinstance(tags, dict):
         return tags.get(key)
+
     return None
 
 
+# =============================================================================
+# LuftVO-Klassifizierung
+# =============================================================================
+
 def classify_luftvo_type(props):
+    """
+    Bestimmt den LuftVO-Typ eines OSM-Features anhand seiner Tags.
+
+    Rückgabe:
+        str  – Typ-Bezeichner (z. B. "hospital", "airport", "military").
+        None – Feature ist für die LuftVO nicht relevant und wird übersprungen.
+    """
+    # Alle relevanten Tags einmalig normalisieren, um wiederholte Aufrufe zu vermeiden.
     amenity                = _norm(_get_tag(props, "amenity"))
     healthcare             = _norm(_get_tag(props, "healthcare"))
     office                 = _norm(_get_tag(props, "office"))
@@ -42,22 +78,39 @@ def classify_luftvo_type(props):
     iata                   = _norm(_get_tag(props, "iata"))
     icao                   = _norm(_get_tag(props, "icao"))
 
+    # --- Gesundheitseinrichtungen ---
     if amenity == "hospital" or healthcare == "hospital":
         return "hospital"
+
+    # --- Sicherheitsbehörden ---
     if amenity == "police":
         return "police"
+
     if amenity == "prison":
         return "prison"
+
+    # --- Diplomatische Einrichtungen ---
     if office in {"diplomatic", "embassy", "consulate"} or amenity in {"embassy", "consulate"}:
         return "diplomatic"
+
+    # --- Behörden und Verwaltung ---
+    # Townhall/Courthouse sind rechtlich grob, aber gebräuchlich als Annäherung.
     if office == "government" or amenity in {"townhall", "courthouse"}:
         return "government_or_security"
+
+    # --- Militärische Anlagen ---
     if landuse == "military" or boundary == "military" or military:
         return "military"
+
+    # --- Industrieanlagen ---
     if landuse == "industrial" or industrial or man_made == "works":
         return "industrial"
+
+    # --- Energieanlagen ---
     if power == "plant":
         return "power_plant"
+
+    # --- Naturschutzgebiete (inkl. Nationalparks, FFH, Vogelschutz) ---
     if (
         boundary == "national_park"
         or protect_class in {"2", "4"}
@@ -69,6 +122,8 @@ def classify_luftvo_type(props):
         or "site of community importance" in designation
     ):
         return "nature_protection"
+
+    # --- Landschaftsschutzgebiete ---
     if (
         protect_class == "5"
         or short_protection_title == "lsg"
@@ -78,54 +133,94 @@ def classify_luftvo_type(props):
     ):
         return "landscape_protection"
 
+    # --- Flughäfen und Flugplätze ---
+    # Großflughäfen werden durch IATA/ICAO-Code oder aerodrome:type identifiziert.
     airport_indicators = {
         "airport", "international", "regional", "commercial",
         "major", "large_airport", "medium_airport",
     }
+
     if aeroway == "aerodrome":
         if aerodrome_type in airport_indicators or aerodrome in airport_indicators or iata or icao:
             return "airport"
         return "aerodrome"
+
     if aeroway in {"airstrip", "heliport", "helipad"}:
         return "airstrip_or_heliport"
 
+    # Feature ist für die LuftVO nicht relevant.
     return None
 
 
+# =============================================================================
+# Geometrie-Erzeugung
+# =============================================================================
+
 def _create_regular_polygon(point, radius_m, corners):
+    """
+    Erstellt ein regelmäßiges n-Eck um einen metrischen Punkt.
+
+    point:
+        Shapely Point im metrischen CRS.
+    radius_m:
+        Umkreisradius in Metern.
+    corners:
+        Anzahl der Ecken (mindestens 3).
+    """
     if corners < 3:
         raise ValueError("polygon_corners muss mindestens 3 sein.")
+
     x, y = point.x, point.y
+
+    # Gleichmäßig verteilte Punkte auf einem Kreis mit dem Umkreisradius.
     coords = [
         (x + radius_m * cos(2 * pi * i / corners),
          y + radius_m * sin(2 * pi * i / corners))
         for i in range(corners)
     ]
+
+    # Polygon schließen (letzter Punkt = erster Punkt).
     coords.append(coords[0])
     return Polygon(coords)
 
 
 def _create_point_polygon_geometry(geom, radius_m, corners):
+    """
+    Erzeugt Polygon oder MultiPolygon aus einem Point- oder MultiPoint-Feature.
+    """
     if geom.geom_type == "Point":
         return _create_regular_polygon(geom, radius_m, corners)
+
     if geom.geom_type == "MultiPoint":
         return MultiPolygon([
             _create_regular_polygon(pt, radius_m, corners)
             for pt in geom.geoms
         ])
+
     raise ValueError(f"Nicht unterstützte Punkt-Geometrie: {geom.geom_type}")
 
 
 def _create_buffered_zone_geometry(geom, radius_m, buffer_resolution):
+    """
+    Vergrößert eine bestehende Geometrie (Polygon, Linie) um radius_m Meter.
+
+    Bei radius_m = 0 wird die Geometrie unverändert zurückgegeben –
+    typisch für Schutzgebiete, die bereits als Fläche vorliegen.
+    """
     if radius_m == 0:
         return geom
     return geom.buffer(radius_m, resolution=buffer_resolution)
 
 
+# =============================================================================
+# Haupt-Pipeline-Funktion
+# =============================================================================
+
 def create_luftvo_buffer_geojson(
     input_geojson,
     output_geojson,
     *,
+    # Sicherheitsradien je Objekttyp (in Metern)
     hospital_radius_m=100,
     police_radius_m=100,
     prison_radius_m=100,
@@ -137,12 +232,32 @@ def create_luftvo_buffer_geojson(
     airport_radius_m=1000,
     aerodrome_radius_m=1500,
     airstrip_heliport_radius_m=1500,
+    # Schutzgebiete werden nicht zusätzlich gepuffert (Fläche selbst = Zone)
     nature_protection_radius_m=0,
     landscape_protection_radius_m=0,
+    # Qualität der erzeugten Polygone
     polygon_corners=64,
     zone_buffer_resolution=16,
     metric_crs=DEFAULT_METRIC_CRS,
 ):
+    """
+    Liest OSM-GeoJSON ein und erzeugt eine gepufferte LuftVO-Zonenebene.
+
+    Für jedes Feature wird der LuftVO-Typ bestimmt und eine Sicherheitszone
+    in der entsprechenden Größe erzeugt:
+
+    - Point / MultiPoint:
+        Regelmäßiges n-Eck mit polygon_corners Ecken und dem Typradius.
+    - Polygon / MultiPolygon / Linie:
+        Bestehende Geometrie wird um den Typradius nach außen gepuffert.
+    - Radius 0:
+        Geometrie wird unverändert übernommen (z. B. für Schutzgebiete).
+
+    Rückgabe:
+        GeoDataFrame mit den erzeugten Zonenflächen in WGS84.
+    """
+
+    # Radius-Lookup nach LuftVO-Typ für schnellen Zugriff in der Schleife.
     radius_by_type = {
         "hospital":               hospital_radius_m,
         "police":                 police_radius_m,
@@ -164,25 +279,39 @@ def create_luftvo_buffer_geojson(
 
     if not input_path.exists():
         raise FileNotFoundError(f"Eingabedatei nicht gefunden: {input_path}")
+
     if polygon_corners < 3:
         raise ValueError("polygon_corners muss mindestens 3 sein.")
+
     if zone_buffer_resolution < 1:
         raise ValueError("zone_buffer_resolution muss mindestens 1 sein.")
 
+    # --- Schritt 1: Eingabe einlesen und CRS normalisieren ---
+
     gdf = gpd.read_file(input_path)
+
     if gdf.empty:
         raise ValueError("Die Eingabe-GeoJSON enthält keine Features.")
+
     gdf = gdf.set_crs(WGS84) if gdf.crs is None else gdf.to_crs(WGS84)
 
+    # --- Schritt 2: Features klassifizieren und relevante herausfiltern ---
+
     rows = []
+
     for _, row in gdf.iterrows():
         geom = row.geometry
+
         if geom is None or geom.is_empty:
             continue
+
         props       = row.drop(labels=["geometry"]).to_dict()
         luftvo_type = classify_luftvo_type(props)
+
+        # Features ohne LuftVO-Relevanz überspringen.
         if luftvo_type is None:
             continue
+
         rows.append({
             **props,
             "luftvo_type":            luftvo_type,
@@ -195,21 +324,36 @@ def create_luftvo_buffer_geojson(
     if not rows:
         raise ValueError("Keine passenden Features für LuftVO-Geometrien gefunden.")
 
-    out        = gpd.GeoDataFrame(rows, geometry="geometry", crs=WGS84)
+    out = gpd.GeoDataFrame(rows, geometry="geometry", crs=WGS84)
+
+    # --- Schritt 3: In metrisches CRS konvertieren ---
+    # Puffer und Polygon-Radien werden in Metern berechnet,
+    # was nur im projizierten metrischen CRS korrekt funktioniert.
     out_metric = out.to_crs(metric_crs)
 
+    # --- Schritt 4: Sicherheitszonen erzeugen ---
+
     new_geometries = []
+
     for geom, radius_m in zip(out_metric.geometry, out_metric["luftvo_radius_m"]):
         if geom.geom_type in {"Point", "MultiPoint"}:
+            # Punktobjekte werden zu regelmäßigen Polygonen.
             new_geom = _create_point_polygon_geometry(geom, radius_m, polygon_corners)
         else:
+            # Flächen und Linien werden nach außen gepuffert.
             new_geom = _create_buffered_zone_geometry(geom, radius_m, zone_buffer_resolution)
+
         new_geometries.append(new_geom)
 
     out_metric["geometry"] = new_geometries
+
+    # buffer(0) repariert mögliche Topologie-Fehler in den erzeugten Geometrien.
     out_metric["geometry"] = out_metric["geometry"].buffer(0)
 
+    # --- Schritt 5: Zurück nach WGS84 und als GeoJSON speichern ---
+
     out_wgs84 = out_metric.to_crs(WGS84)
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     out_wgs84.to_file(output_path, driver="GeoJSON")
 
