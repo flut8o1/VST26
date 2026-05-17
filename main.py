@@ -74,10 +74,10 @@ ZONEN_KARTE_ANZEIGEN  = False
 # =============================================================================
 
 # Anzahl der Ecken für Punkt-Polygone (höher = runder)
-POLYGON_ECKEN_N = 12
+POLYGON_ECKEN_N = 8
 
 # Rundheit der Puffer um bestehende Flächen/Linien (höher = runder)
-ZONE_BUFFER_RESOLUTION = 16
+ZONE_BUFFER_RESOLUTION = 8
 
 
 # =============================================================================
@@ -86,7 +86,7 @@ ZONE_BUFFER_RESOLUTION = 16
 
 # "grid"  = regelmäßiges Rechteckgitter (schnell, einfach)
 # "zonen" = Sichtbarkeitsgraph mit Knoten an Zonenecken (kompakter, präziser)
-NETZ_TYP = "zonen"
+NETZ_TYP = "grid"
 
 
 # =============================================================================
@@ -175,11 +175,11 @@ SATELLITE_BACKGROUND = True
 BASEMAP_ZOOM = 13
 
 # Mittelpunkt des festen PNG-Ausschnitts in WGS84
-PNG_CENTER_LAT = 48.137154
-PNG_CENTER_LON = 11.576124
+PNG_CENTER_LAT = 48.1085
+PNG_CENTER_LON = 11.5953
 
 # Seitenlänge des quadratischen Ausschnitts in Kilometern
-PNG_SQUARE_SIDE_KM = 25
+PNG_SQUARE_SIDE_KM = 15
 
 # True = fester Ausschnitt (oben), False = Ausschnitt aus Datengrenzen
 PNG_FESTER_AUSSCHNITT = True
