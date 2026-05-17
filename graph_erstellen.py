@@ -1,3 +1,19 @@
+"""
+graph_erstellen.py – Erzeugung eines regelmäßigen Gitter-Navigationsgraphen.
+
+Legt ein gleichmäßiges Rechteckgitter über den Kartenbereich.
+Knoten innerhalb von LuftVO-Sperrzonen werden entfernt,
+Kanten, die Sperrzonen schneiden, ebenfalls.
+
+Start- und Endpunkt werden als zusätzliche Knoten eingefügt und mit
+den nächsten sichtbaren Gitterknoten verbunden.
+
+Performance-Hinweis:
+    Die vereinigte Sperrzone wird einmalig mit prep() vorberechnet,
+    sodass die tausenden Schnitt-Tests gegen dieselbe Geometrie
+    deutlich schneller ablaufen als ohne Vorbereitung.
+"""
+
 from pathlib import Path
 
 import geopandas as gpd
@@ -6,9 +22,23 @@ from shapely.geometry import Point, LineString
 from utils import WGS84, DEFAULT_METRIC_CRS, get_geometry_union, wgs84_to_metric, prepare_geometry
 
 
+# =============================================================================
+# Kanten-Hilfsfunktionen
+# =============================================================================
+
 def _edge_orientation(from_point, to_point, tolerance=0.001):
+    """
+    Bestimmt die Orientierung einer Kante im metrischen CRS.
+
+    Rückgabe:
+        "west_ost"  – horizontale Kante
+        "nord_sued" – vertikale Kante
+        "diagonal"  – diagonale Kante
+        "special"   – Sonderverbindung (Start/End-Anbindung)
+    """
     dx = abs(to_point.x - from_point.x)
     dy = abs(to_point.y - from_point.y)
+
     if dy <= tolerance and dx > tolerance:
         return "west_ost"
     if dx <= tolerance and dy > tolerance:
@@ -28,11 +58,27 @@ def _connect_special_node_to_grid(
     edge_kind,
     max_connections,
 ):
+    """
+    Verbindet einen Start- oder Endknoten mit den nächsten sichtbaren Gitterknoten.
+
+    Es werden bis zu max_connections Verbindungen erstellt, sortiert nach
+    aufsteigender Entfernung. Verbindungen, die eine Sperrzone schneiden,
+    werden übersprungen.
+
+    forbidden:
+        PreparedGeometry der vereinigten Sperrzonen (für schnelle Tests).
+
+    Rückgabe:
+        Nächste freie edge_id (int).
+
+    Wirft ValueError, wenn kein sichtbarer Gitterknoten erreichbar ist.
+    """
     if max_connections < 1:
         raise ValueError("special_connections_per_point muss mindestens 1 sein.")
 
     special_point = special_node["geometry"]
 
+    # Kandidaten nach Entfernung aufsteigend sortieren.
     candidates = sorted(
         [
             (special_point.distance(n["geometry"]), n)
@@ -49,6 +95,7 @@ def _connect_special_node_to_grid(
         grid_point = grid_node["geometry"]
         line       = LineString([special_point, grid_point])
 
+        # Verbindung überspringen, wenn sie eine Sperrzone schneidet.
         if forbidden.intersects(line):
             continue
 
@@ -82,6 +129,10 @@ def _connect_special_node_to_grid(
     return edge_id
 
 
+# =============================================================================
+# Haupt-Pipeline-Funktion
+# =============================================================================
+
 def create_navigation_graph(
     zones_geojson,
     output_nodes_geojson,
@@ -98,29 +149,55 @@ def create_navigation_graph(
     end_lon=None,
     special_connections_per_point=1,
 ):
+    """
+    Erzeugt einen regelmäßigen Gitter-Navigationsgraphen.
+
+    Regeln:
+    - Gitterknoten liegen im gleichmäßigen Abstand spacing_m.
+    - Knoten innerhalb oder auf Sperrzonen werden entfernt.
+    - Kanten, die Sperrzonen schneiden, werden entfernt.
+    - Ohne Diagonalen: nur West-Ost- und Nord-Süd-Verbindungen.
+    - Mit Diagonalen: zusätzlich direkte Diagonalverbindungen.
+    - Start- und Endpunkt werden als eigene Knoten hinzugefügt
+      und mit den nächsten sichtbaren Gitterknoten verbunden.
+
+    Rückgabe:
+        (nodes_wgs84, edges_wgs84) – beide als GeoDataFrames in WGS84.
+    """
     zones_path = Path(zones_geojson)
     nodes_path = Path(output_nodes_geojson)
     edges_path = Path(output_edges_geojson)
 
     if not zones_path.exists():
         raise FileNotFoundError(f"Zonen-Datei nicht gefunden: {zones_path}")
+
     if spacing_m <= 0:
         raise ValueError("spacing_m muss größer als 0 sein.")
+
     if bbox_padding_m < 0:
         raise ValueError("bbox_padding_m darf nicht negativ sein.")
+
     if special_connections_per_point < 1:
         raise ValueError("special_connections_per_point muss mindestens 1 sein.")
 
+    # --- Sperrzonen laden, reparieren und zu einer Gesamtfläche vereinigen ---
+
     zones = gpd.read_file(zones_path)
+
     if zones.empty:
         raise ValueError("Die Zonen-Datei enthält keine Features.")
 
     zones        = zones.set_crs(WGS84) if zones.crs is None else zones.to_crs(WGS84)
     zones_metric = zones.to_crs(metric_crs)
-    zones_metric["geometry"] = zones_metric.geometry.buffer(0)
+    zones_metric["geometry"] = zones_metric.geometry.buffer(0)   # Topologie-Fehler beheben
 
     forbidden_area = get_geometry_union(zones_metric)
-    forbidden      = prepare_geometry(forbidden_area)
+
+    # Einmalige Vorberechnung: alle folgenden intersects()-Tests laufen gegen
+    # dieselbe Geometrie – prep() macht sie deutlich schneller.
+    forbidden = prepare_geometry(forbidden_area)
+
+    # --- Start- und Endpunkte vorbereiten und validieren ---
 
     special_points = []
 
@@ -136,6 +213,8 @@ def create_navigation_graph(
         if forbidden.intersects(sp["geometry"]):
             raise ValueError(f"{sp['label']} liegt innerhalb oder auf einer Sperrzone.")
 
+    # --- Bounding Box bestimmen (Zonen + Start/End + optionales Padding) ---
+
     minx, miny, maxx, maxy = zones_metric.total_bounds
 
     for sp in special_points:
@@ -150,6 +229,7 @@ def create_navigation_graph(
     maxx += bbox_padding_m
     maxy += bbox_padding_m
 
+    # Optional: Gitter auf den sichtbaren PNG-Ausschnitt begrenzen.
     if max_bbox_wgs84 is not None:
         _sw  = wgs84_to_metric(max_bbox_wgs84[0], max_bbox_wgs84[1], metric_crs)
         _ne  = wgs84_to_metric(max_bbox_wgs84[2], max_bbox_wgs84[3], metric_crs)
@@ -158,18 +238,24 @@ def create_navigation_graph(
         maxx = min(maxx, _ne.x)
         maxy = min(maxy, _ne.y)
 
+    # ==========================================================================
+    # Schritt 1: Gitterknoten erzeugen
+    # ==========================================================================
+
     grid_nodes  = []
-    node_lookup = {}
-    row_index   = 0
-    y           = miny
+    node_lookup = {}   # (row, col) -> node_id für schnellen Nachbar-Lookup
+
+    row_index = 0
+    y = miny
 
     while y <= maxy:
         col_index = 0
-        x         = minx
+        x = minx
 
         while x <= maxx:
             point = Point(x, y)
 
+            # Vorberechnete Geometrie macht diesen Test deutlich schneller.
             if not forbidden.intersects(point):
                 node_id = len(grid_nodes)
 
@@ -198,6 +284,10 @@ def create_navigation_graph(
 
     nodes = list(grid_nodes)
 
+    # ==========================================================================
+    # Schritt 2: Start- und Endknoten hinzufügen
+    # ==========================================================================
+
     for sp in special_points:
         pt = sp["geometry"]
         nodes.append({
@@ -212,6 +302,13 @@ def create_navigation_graph(
             "geometry":  pt,
         })
 
+    # ==========================================================================
+    # Schritt 3: Gitterkanten erzeugen
+    # ==========================================================================
+
+    # Nur Vorwärts-Nachbarn prüfen, um doppelte Kanten zu vermeiden.
+    # Ohne Diagonalen: rechts (0,1) und oben (1,0).
+    # Mit Diagonalen: zusätzlich (1,1) und (1,-1).
     neighbor_offsets = [(0, 1), (1, 0)]
     if connect_diagonal:
         neighbor_offsets += [(1, 1), (1, -1)]
@@ -235,6 +332,7 @@ def create_navigation_graph(
             to_point = node_by_id[to_id]["geometry"]
             line     = LineString([from_point, to_point])
 
+            # Kanten, die Sperrzonen schneiden, werden verworfen.
             if forbidden.intersects(line):
                 continue
 
@@ -255,6 +353,10 @@ def create_navigation_graph(
 
             edge_id += 1
 
+    # ==========================================================================
+    # Schritt 4: Start-/Endknoten mit nächsten sichtbaren Gitterknoten verbinden
+    # ==========================================================================
+
     for node in [n for n in nodes if n["node_kind"] in {"start", "end"}]:
         edge_id = _connect_special_node_to_grid(
             special_node=node,
@@ -268,6 +370,10 @@ def create_navigation_graph(
 
     if not edges:
         raise ValueError("Es wurden keine erlaubten Kanten erzeugt.")
+
+    # ==========================================================================
+    # Schritt 5: Als GeoJSON speichern
+    # ==========================================================================
 
     nodes_gdf = gpd.GeoDataFrame(nodes, geometry="geometry", crs=metric_crs)
     edges_gdf = gpd.GeoDataFrame(edges, geometry="geometry", crs=metric_crs)
