@@ -5,7 +5,8 @@ Liest OSM-Rohdaten (GeoJSON, z. B. aus Overpass) ein, klassifiziert jedes
 Feature anhand seiner OSM-Tags und erzeugt daraus gepufferte No-Fly-Zones
 gemäß der deutschen Luftverkehrs-Ordnung (LuftVO).
 
-Ausgabe: GeoJSON mit Polygon-Geometrien, bereit für die Graph-Erstellung.
+Ausgabe: GeoDataFrame mit Polygon-Geometrien (WGS84), das direkt im
+Speicher an die Graph-Erstellung weitergereicht wird – keine Zwischendatei.
 """
 
 from pathlib import Path
@@ -218,7 +219,6 @@ def _create_buffered_zone_geometry(geom, radius_m, buffer_resolution):
 
 def create_luftvo_buffer_geojson(
     input_geojson,
-    output_geojson,
     *,
     # Sicherheitsradien je Objekttyp (in Metern)
     hospital_radius_m=100,
@@ -274,8 +274,7 @@ def create_luftvo_buffer_geojson(
         "landscape_protection":   landscape_protection_radius_m,
     }
 
-    input_path  = Path(input_geojson)
-    output_path = Path(output_geojson)
+    input_path = Path(input_geojson)
 
     if not input_path.exists():
         raise FileNotFoundError(f"Eingabedatei nicht gefunden: {input_path}")
@@ -350,11 +349,6 @@ def create_luftvo_buffer_geojson(
     # buffer(0) repariert mögliche Topologie-Fehler in den erzeugten Geometrien.
     out_metric["geometry"] = out_metric["geometry"].buffer(0)
 
-    # --- Schritt 5: Zurück nach WGS84 und als GeoJSON speichern ---
+    # --- Schritt 5: Zurück nach WGS84 und im Speicher zurückgeben ---
 
-    out_wgs84 = out_metric.to_crs(WGS84)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    out_wgs84.to_file(output_path, driver="GeoJSON")
-
-    return out_wgs84
+    return out_metric.to_crs(WGS84)
