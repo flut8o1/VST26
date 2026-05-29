@@ -1,134 +1,126 @@
 """
-Algoritmen.py – Kürzeste-Weg-Suche im Navigationsgraphen.
+Algoritmen.py – Kürzeste-Weg-Suche auf dem Matrix-Gitter.
 
-Erhält den erzeugten Graphen (Knoten + Kanten als GeoDataFrames) im Speicher,
-sucht den kürzesten Weg zwischen Start- und Endknoten mit Dijkstra oder A*
-und visualisiert das Ergebnis als PNG-Karte.
+Erhält das NavigationGrid (Matrix-Darstellung) im Speicher und sucht den
+kürzesten Weg zwischen Start- und Endknoten mit Dijkstra oder A*.
 
-Einzige Ausgabedatei ist die PNG – Route und Graph bleiben im Speicher.
+Die Algorithmen arbeiten direkt auf den (row, col)-Indizes der Matrix:
+Die Nachbarn eines Knotens werden über die Passierbarkeits-Arrays bestimmt –
+es wird keine Adjazenzliste aufgebaut. Start- und Endknoten liegen außerhalb
+des Gitters und sind über ihre vorab gespeicherten Verbindungen angebunden.
+
+Einzige Ausgabedatei ist die PNG-Routenkarte.
 """
 
-from pathlib import Path
+import math
 from heapq import heappush, heappop
-from math import sqrt
+
+import geopandas as gpd
+from shapely.geometry import Point, LineString
 
 from utils import (
-    WGS84, WEB_MERCATOR, DEFAULT_METRIC_CRS,
+    WGS84, WEB_MERCATOR,
     get_fixed_extent_web_mercator,
     setup_map_figure, save_map_figure,
 )
 
 
 # =============================================================================
-# Graph-Aufbau
+# Nachbarschaft auf der Matrix
 # =============================================================================
 
-def _find_start_end_node_ids(nodes_gdf):
+def _make_neighbor_function(grid):
     """
-    Liest die node_id von Start- und Endknoten aus dem GeoDataFrame.
+    Erstellt eine Funktion, die zu einem Knoten seine Nachbarn liefert.
 
-    Wirft ValueError, wenn die Spalte 'node_kind' fehlt oder kein
-    Start- bzw. Endknoten vorhanden ist.
+    Für Gitterknoten werden die Nachbarn über die Passierbarkeits-Arrays der
+    Matrix bestimmt (4 orthogonale, optional 4 diagonale Richtungen). Start-
+    und Endknoten nutzen ihre gespeicherten Verbindungen.
+
+    Rückgabe einer Nachbarfunktion node_id -> Liste von (nachbar_id, kosten_m).
     """
-    if "node_kind" not in nodes_gdf.columns:
-        raise ValueError("Im Knoten-GeoDataFrame fehlt die Spalte 'node_kind'.")
+    n_rows, n_cols   = grid.n_rows, grid.n_cols
+    passable         = grid.passable
+    spacing          = grid.spacing_m
+    diagonal         = spacing * math.sqrt(2)
+    connect_diagonal = grid.connect_diagonal
+    start_id, end_id = grid.start_id, grid.end_id
 
-    start_nodes = nodes_gdf[nodes_gdf["node_kind"] == "start"]
-    end_nodes   = nodes_gdf[nodes_gdf["node_kind"] == "end"]
+    # Rückverbindungen: von einem Gitterknoten zurück zum Start-/Endknoten.
+    back = {}
+    for grid_id, length in grid.start_connections:
+        back.setdefault(grid_id, []).append((start_id, length))
+    for grid_id, length in grid.end_connections:
+        back.setdefault(grid_id, []).append((end_id, length))
 
-    if start_nodes.empty:
-        raise ValueError("Kein Startknoten gefunden. Erwartet: node_kind == 'start'.")
+    def neighbors(node_id):
+        if node_id == start_id:
+            return list(grid.start_connections)
+        if node_id == end_id:
+            return list(grid.end_connections)
 
-    if end_nodes.empty:
-        raise ValueError("Kein Endknoten gefunden. Erwartet: node_kind == 'end'.")
+        row, col = divmod(node_id, n_cols)
+        result   = []
 
-    return int(start_nodes.iloc[0]["node_id"]), int(end_nodes.iloc[0]["node_id"])
+        # Orthogonale Nachbarn.
+        if col + 1 < n_cols and passable["E"][row, col]:
+            result.append((row * n_cols + (col + 1), spacing))
+        if col - 1 >= 0 and passable["W"][row, col]:
+            result.append((row * n_cols + (col - 1), spacing))
+        if row + 1 < n_rows and passable["N"][row, col]:
+            result.append(((row + 1) * n_cols + col, spacing))
+        if row - 1 >= 0 and passable["S"][row, col]:
+            result.append(((row - 1) * n_cols + col, spacing))
 
+        # Diagonale Nachbarn.
+        if connect_diagonal:
+            if row + 1 < n_rows and col + 1 < n_cols and passable["NE"][row, col]:
+                result.append(((row + 1) * n_cols + (col + 1), diagonal))
+            if row + 1 < n_rows and col - 1 >= 0 and passable["NW"][row, col]:
+                result.append(((row + 1) * n_cols + (col - 1), diagonal))
+            if row - 1 >= 0 and col + 1 < n_cols and passable["SE"][row, col]:
+                result.append(((row - 1) * n_cols + (col + 1), diagonal))
+            if row - 1 >= 0 and col - 1 >= 0 and passable["SW"][row, col]:
+                result.append(((row - 1) * n_cols + (col - 1), diagonal))
 
-def _build_adjacency(edges_gdf, *, directed=False):
-    """
-    Erstellt eine Adjazenzliste aus den Kanten des Graphen.
+        # Anbindung an Start-/Endknoten, falls dieser Gitterknoten verbunden ist.
+        if node_id in back:
+            result.extend(back[node_id])
 
-    directed:
-        False – Kanten gelten in beide Richtungen (Standardfall).
-        True  – Kanten gelten nur von from_node nach to_node.
+        return result
 
-    Rückgabe:
-        Dict: node_id -> Liste von {to_node, edge_id, length_m}.
-    """
-    required_columns = {"from_node", "to_node", "length_m", "edge_id"}
-    missing = required_columns - set(edges_gdf.columns)
-
-    if missing:
-        raise ValueError(f"Im Kanten-GeoDataFrame fehlen Spalten: {missing}")
-
-    adjacency = {}
-
-    for _, row in edges_gdf.iterrows():
-        from_node = int(row["from_node"])
-        to_node   = int(row["to_node"])
-        edge_id   = int(row["edge_id"])
-        length_m  = float(row["length_m"])
-
-        adjacency.setdefault(from_node, []).append(
-            {"to_node": to_node, "edge_id": edge_id, "length_m": length_m}
-        )
-
-        # Bei ungerichtetem Graph Rückkante eintragen.
-        if not directed:
-            adjacency.setdefault(to_node, []).append(
-                {"to_node": from_node, "edge_id": edge_id, "length_m": length_m}
-            )
-
-    return adjacency
+    return neighbors
 
 
-# =============================================================================
-# Pfad-Rekonstruktion
-# =============================================================================
+def _reconstruct_path(previous, start_id, end_id):
+    """Rekonstruiert die Knotenfolge vom Start zum Ziel aus dem previous-Dict."""
+    path    = [end_id]
+    current = end_id
 
-def _reconstruct_path(previous, start_node_id, end_node_id):
-    """
-    Rekonstruiert Knoten- und Kantenpfad aus dem previous-Dict des Suchalgorithmus.
+    while current != start_id:
+        current = previous[current]
+        path.append(current)
 
-    Wirft ValueError, wenn kein Weg existiert.
-    """
-    if end_node_id not in previous and start_node_id != end_node_id:
-        raise ValueError("Kein Weg zwischen Start und Ende gefunden.")
-
-    node_path = [end_node_id]
-    edge_path = []
-    current   = end_node_id
-
-    # Rückwärts vom Ziel zum Start traversieren.
-    while current != start_node_id:
-        prev_node, edge_id = previous[current]
-        edge_path.append(edge_id)
-        node_path.append(prev_node)
-        current = prev_node
-
-    node_path.reverse()
-    edge_path.reverse()
-
-    return node_path, edge_path
+    path.reverse()
+    return path
 
 
 # =============================================================================
 # Suchalgorithmen
 # =============================================================================
 
-def _dijkstra(adjacency, start_node_id, end_node_id):
+def _dijkstra(neighbors, start_id, end_id):
     """
     Dijkstra-Algorithmus zur Suche des kürzesten Weges.
 
     Verwendet einen Min-Heap für effiziente Extraktion des nächstgelegenen Knotens.
 
     Rückgabe:
-        (node_path, edge_path, route_length_m)
+        (node_path, route_length_m)
     """
-    distances = {start_node_id: 0.0}
+    distances = {start_id: 0.0}
     previous  = {}
-    queue     = [(0.0, start_node_id)]
+    queue     = [(0.0, start_id)]
     visited   = set()
 
     while queue:
@@ -139,26 +131,24 @@ def _dijkstra(adjacency, start_node_id, end_node_id):
 
         visited.add(current_node)
 
-        if current_node == end_node_id:
+        if current_node == end_id:
             break
 
-        for edge in adjacency.get(current_node, []):
-            neighbor     = edge["to_node"]
-            new_distance = current_distance + edge["length_m"]
+        for neighbor, cost in neighbors(current_node):
+            new_distance = current_distance + cost
 
             if new_distance < distances.get(neighbor, float("inf")):
-                distances[neighbor]  = new_distance
-                previous[neighbor]   = (current_node, edge["edge_id"])
+                distances[neighbor] = new_distance
+                previous[neighbor]  = current_node
                 heappush(queue, (new_distance, neighbor))
 
-    if end_node_id not in distances:
+    if end_id not in distances:
         raise ValueError("Dijkstra konnte keinen Weg finden.")
 
-    node_path, edge_path = _reconstruct_path(previous, start_node_id, end_node_id)
-    return node_path, edge_path, distances[end_node_id]
+    return _reconstruct_path(previous, start_id, end_id), distances[end_id]
 
 
-def _astar(adjacency, nodes_metric, start_node_id, end_node_id):
+def _astar(neighbors, heuristic, start_id, end_id):
     """
     A*-Algorithmus zur Suche des kürzesten Weges.
 
@@ -166,21 +156,11 @@ def _astar(adjacency, nodes_metric, start_node_id, end_node_id):
     die den tatsächlichen Restweg nie überschätzt.
 
     Rückgabe:
-        (node_path, edge_path, route_length_m)
+        (node_path, route_length_m)
     """
-    nodes_by_id  = nodes_metric.set_index("node_id_int")
-    target_point = nodes_by_id.loc[end_node_id].geometry
-
-    def heuristic(node_id):
-        """Euklidische Distanz vom Knoten zum Ziel als Unterschätzung des Restweges."""
-        point = nodes_by_id.loc[node_id].geometry
-        dx    = point.x - target_point.x
-        dy    = point.y - target_point.y
-        return sqrt(dx * dx + dy * dy)
-
-    g_score  = {start_node_id: 0.0}
+    g_score  = {start_id: 0.0}
     previous = {}
-    queue    = [(heuristic(start_node_id), 0.0, start_node_id)]
+    queue    = [(heuristic(start_id), 0.0, start_id)]
     visited  = set()
 
     while queue:
@@ -191,59 +171,42 @@ def _astar(adjacency, nodes_metric, start_node_id, end_node_id):
 
         visited.add(current_node)
 
-        if current_node == end_node_id:
+        if current_node == end_id:
             break
 
-        for edge in adjacency.get(current_node, []):
-            neighbor    = edge["to_node"]
-            tentative_g = current_g + edge["length_m"]
+        for neighbor, cost in neighbors(current_node):
+            tentative_g = current_g + cost
 
             if tentative_g < g_score.get(neighbor, float("inf")):
                 g_score[neighbor]  = tentative_g
-                previous[neighbor] = (current_node, edge["edge_id"])
-                f_score            = tentative_g + heuristic(neighbor)
-                heappush(queue, (f_score, tentative_g, neighbor))
+                previous[neighbor] = current_node
+                heappush(queue, (tentative_g + heuristic(neighbor), tentative_g, neighbor))
 
-    if end_node_id not in g_score:
+    if end_id not in g_score:
         raise ValueError("A* konnte keinen Weg finden.")
 
-    node_path, edge_path = _reconstruct_path(previous, start_node_id, end_node_id)
-    return node_path, edge_path, g_score[end_node_id]
+    return _reconstruct_path(previous, start_id, end_id), g_score[end_id]
 
 
 # =============================================================================
-# Route aus dem Graphen extrahieren
+# Route als Geometrie
 # =============================================================================
 
-def _extract_route(
-    *,
-    nodes_metric,
-    edges_metric,
-    node_path,
-    edge_path,
-):
+def _build_route_geometries(grid, node_path):
     """
-    Extrahiert die gefundene Route aus dem Graphen.
+    Wandelt die Knotenfolge der Route in Zeichengeometrien (WGS84) um.
 
     Rückgabe:
-        (route_nodes_wgs84, route_edges_wgs84) – beide als GeoDataFrames in WGS84.
+        (route_line, route_points, start_point, end_point) – jeweils GeoSeries.
     """
-    node_indexed = nodes_metric.set_index("node_id_int")
+    coords = [grid.node_xy(node_id) for node_id in node_path]
 
-    # Knoten in Reihenfolge der Route extrahieren.
-    route_nodes              = node_indexed.loc[node_path].copy()
-    route_nodes["route_order"] = range(len(route_nodes))
+    route_line   = gpd.GeoSeries([LineString(coords)], crs=grid.metric_crs).to_crs(WGS84)
+    route_points = gpd.GeoSeries([Point(xy) for xy in coords], crs=grid.metric_crs).to_crs(WGS84)
+    start_point  = gpd.GeoSeries([Point(grid.start_xy)], crs=grid.metric_crs).to_crs(WGS84)
+    end_point    = gpd.GeoSeries([Point(grid.end_xy)], crs=grid.metric_crs).to_crs(WGS84)
 
-    # Kanten nach edge_id filtern und in Reihenfolge sortieren.
-    edge_order_by_id             = {int(eid): order for order, eid in enumerate(edge_path)}
-    edges_metric                 = edges_metric.copy()
-    edges_metric["edge_id_int"]  = edges_metric["edge_id"].astype(int)
-
-    route_edges              = edges_metric[edges_metric["edge_id_int"].isin(edge_order_by_id)].copy()
-    route_edges["route_order"] = route_edges["edge_id_int"].map(edge_order_by_id)
-    route_edges              = route_edges.sort_values("route_order")
-
-    return route_nodes.to_crs(WGS84), route_edges.to_crs(WGS84)
+    return route_line, route_points, start_point, end_point
 
 
 # =============================================================================
@@ -252,11 +215,12 @@ def _extract_route(
 
 def _visualize_route_png(
     *,
-    nodes,
-    edges,
-    route_nodes,
-    route_edges,
+    grid,
     zones,
+    route_line,
+    route_points,
+    start_point,
+    end_point,
     output_png,
     show_map=True,
     satellite_background=True,
@@ -269,26 +233,25 @@ def _visualize_route_png(
     """
     Erzeugt eine PNG-Karte mit dem gesamten Graphen und der gefundenen Route.
 
-    Alle Ebenen werden als GeoDataFrames übergeben (kein Datei-Zugriff).
-
     Ebenen (von unten nach oben):
         1. Satellitenhintergrund (optional)
         2. Sperrzonen – rot, transparent
         3. Alle Graphkanten – cyan, dünn
         4. Alle Graphknoten – gelb, klein
-        5. Route-Kanten – magenta, breit
+        5. Route-Linie – magenta, breit
         6. Route-Knoten – weiß mit schwarzem Rand
         7. Start- und Endpunkt – grün / rot, groß
 
     Rückgabe:
         Path-Objekt der gespeicherten PNG-Datei.
     """
-
     # Alle Layer in Web Mercator projizieren.
-    nodes       = nodes.to_crs(WEB_MERCATOR)
-    edges       = edges.to_crs(WEB_MERCATOR)
-    route_nodes = route_nodes.to_crs(WEB_MERCATOR)
-    route_edges = route_edges.to_crs(WEB_MERCATOR)
+    nodes        = grid.nodes_gdf.to_crs(WEB_MERCATOR)
+    edges        = grid.edges_gdf.to_crs(WEB_MERCATOR)
+    route_line   = route_line.to_crs(WEB_MERCATOR)
+    route_points = route_points.to_crs(WEB_MERCATOR)
+    start_point  = start_point.to_crs(WEB_MERCATOR)
+    end_point    = end_point.to_crs(WEB_MERCATOR)
 
     if zones is not None:
         zones = zones.to_crs(WEB_MERCATOR)
@@ -319,22 +282,15 @@ def _visualize_route_png(
     # Ebene 4: Alle Graphknoten
     nodes.plot(ax=ax, color="yellow", markersize=2, alpha=0.55, zorder=4)
 
-    # Ebene 5: Route-Kanten
-    route_edges.plot(ax=ax, color="magenta", linewidth=3.0, alpha=0.95, zorder=5)
+    # Ebene 5: Route-Linie
+    route_line.plot(ax=ax, color="magenta", linewidth=3.0, alpha=0.95, zorder=5)
 
     # Ebene 6: Route-Knoten
-    route_nodes.plot(ax=ax, color="white", edgecolor="black", markersize=18, alpha=1.0, zorder=6)
+    route_points.plot(ax=ax, color="white", edgecolor="black", markersize=18, alpha=1.0, zorder=6)
 
     # Ebene 7: Start- und Endpunkt hervorheben.
-    if "node_kind" in route_nodes.columns:
-        start = route_nodes[route_nodes["node_kind"] == "start"]
-        end   = route_nodes[route_nodes["node_kind"] == "end"]
-
-        if not start.empty:
-            start.plot(ax=ax, color="lime", edgecolor="black", markersize=80, zorder=7)
-
-        if not end.empty:
-            end.plot(ax=ax, color="red", edgecolor="black", markersize=80, zorder=7)
+    start_point.plot(ax=ax, color="lime", edgecolor="black", markersize=80, zorder=7)
+    end_point.plot(ax=ax, color="red", edgecolor="black", markersize=80, zorder=7)
 
     return save_map_figure(fig, ax, output_png, title="Kürzester Weg im Graphen", show_map=show_map)
 
@@ -344,14 +300,11 @@ def _visualize_route_png(
 # =============================================================================
 
 def find_path_and_visualize(
-    nodes,
-    edges,
+    grid,
     *,
     zones=None,
     output_png="route_karte.png",
     algorithm="dijkstra",
-    directed=False,
-    metric_crs=DEFAULT_METRIC_CRS,
     show_map=True,
     satellite_background=True,
     basemap_zoom=13,
@@ -361,75 +314,52 @@ def find_path_and_visualize(
     square_side_km=25,
 ):
     """
-    Sucht den kürzesten Weg im Navigationsgraphen und visualisiert ihn.
+    Sucht den kürzesten Weg im Navigationsgitter und visualisiert ihn.
 
-    nodes / edges:
-        GeoDataFrames des Graphen (wie von Graph.create_navigation_graph erzeugt).
+    grid:
+        NavigationGrid (wie von Graph.create_navigation_graph erzeugt).
     zones:
         Optionales GeoDataFrame der Sperrzonen für die Kartendarstellung.
 
     algorithm:
         "dijkstra" – Dijkstra-Algorithmus (optimal, keine Heuristik).
         "astar"    – A*-Algorithmus (schneller durch euklidische Heuristik).
-    directed:
-        False – Kanten gelten in beide Richtungen.
-        True  – Kanten gelten nur in Richtung from_node -> to_node.
 
     Rückgabe:
-        Dict mit Ergebniskennzahlen (Algorithmus, Länge, Knoten-/Kantenzahl, PNG-Pfad).
+        Dict mit Ergebniskennzahlen (Algorithmus, Länge, Knotenzahl, PNG-Pfad).
     """
     algorithm = algorithm.lower().strip()
 
     if algorithm not in {"dijkstra", "astar"}:
         raise ValueError("algorithm muss 'dijkstra' oder 'astar' sein.")
 
-    # --- Graph in metrisches CRS bringen ---
+    neighbors = _make_neighbor_function(grid)
 
-    nodes_metric = nodes.to_crs(metric_crs)
-    edges_metric = edges.to_crs(metric_crs)
-
-    # Integer-Index für A*-Heuristik und Routenextraktion.
-    nodes_metric["node_id_int"] = nodes_metric["node_id"].astype(int)
-
-    start_node_id, end_node_id = _find_start_end_node_ids(nodes_metric)
-
-    adjacency = _build_adjacency(edges_metric, directed=directed)
-
-    # --- Wegsuche ---
+    # --- Wegsuche direkt auf der Matrix ---
 
     if algorithm == "dijkstra":
-        node_path, edge_path, route_length_m = _dijkstra(
-            adjacency=adjacency,
-            start_node_id=start_node_id,
-            end_node_id=end_node_id,
-        )
+        node_path, route_length_m = _dijkstra(neighbors, grid.start_id, grid.end_id)
     else:
-        node_path, edge_path, route_length_m = _astar(
-            adjacency=adjacency,
-            nodes_metric=nodes_metric,
-            start_node_id=start_node_id,
-            end_node_id=end_node_id,
-        )
+        end_x, end_y = grid.end_xy
 
-    # --- Route aus dem Graphen extrahieren (im Speicher) ---
+        def heuristic(node_id):
+            """Euklidische Distanz zum Ziel als Unterschätzung des Restweges."""
+            x, y = grid.node_xy(node_id)
+            return math.hypot(x - end_x, y - end_y)
 
-    route_nodes_wgs84, route_edges_wgs84 = _extract_route(
-        nodes_metric=nodes_metric,
-        edges_metric=edges_metric,
-        node_path=node_path,
-        edge_path=edge_path,
-    )
+        node_path, route_length_m = _astar(neighbors, heuristic, grid.start_id, grid.end_id)
 
-    total_graph_length_m = float(edges_metric["length_m"].astype(float).sum())
+    # --- Route als Geometrie und Karte erzeugen (einzige Ausgabedatei) ---
 
-    # --- Karte erzeugen (einzige Ausgabedatei) ---
+    route_line, route_points, start_point, end_point = _build_route_geometries(grid, node_path)
 
     map_file = _visualize_route_png(
-        nodes=nodes,
-        edges=edges,
-        route_nodes=route_nodes_wgs84,
-        route_edges=route_edges_wgs84,
+        grid=grid,
         zones=zones,
+        route_line=route_line,
+        route_points=route_points,
+        start_point=start_point,
+        end_point=end_point,
         output_png=output_png,
         show_map=show_map,
         satellite_background=satellite_background,
@@ -440,15 +370,17 @@ def find_path_and_visualize(
         square_side_km=square_side_km,
     )
 
+    total_graph_length_m = grid.total_edge_length_m
+
     return {
         "algorithm":             algorithm,
-        "start_node_id":         start_node_id,
-        "end_node_id":           end_node_id,
+        "start_node_id":         grid.start_id,
+        "end_node_id":           grid.end_id,
         "route_length_m":        route_length_m,
         "route_length_km":       route_length_m / 1000,
         "total_graph_length_m":  total_graph_length_m,
         "total_graph_length_km": total_graph_length_m / 1000,
         "route_node_count":      len(node_path),
-        "route_edge_count":      len(edge_path),
+        "route_edge_count":      len(node_path) - 1,
         "route_map_png":         map_file,
     }
