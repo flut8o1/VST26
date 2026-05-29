@@ -8,13 +8,14 @@ Kanten, die Sperrzonen schneiden, ebenfalls.
 Start- und Endpunkt werden als zusätzliche Knoten eingefügt und mit
 den nächsten sichtbaren Gitterknoten verbunden.
 
+Eingabe und Ausgabe erfolgen als GeoDataFrames im Speicher –
+es werden keine Zwischendateien geschrieben.
+
 Performance-Hinweis:
     Die vereinigte Sperrzone wird einmalig mit prep() vorberechnet,
     sodass die tausenden Schnitt-Tests gegen dieselbe Geometrie
     deutlich schneller ablaufen als ohne Vorbereitung.
 """
-
-from pathlib import Path
 
 import geopandas as gpd
 from shapely.geometry import Point, LineString
@@ -134,9 +135,7 @@ def _connect_special_node_to_grid(
 # =============================================================================
 
 def create_navigation_graph(
-    zones_geojson,
-    output_nodes_geojson,
-    output_edges_geojson,
+    zones,
     *,
     spacing_m=250,
     metric_crs=DEFAULT_METRIC_CRS,
@@ -152,6 +151,9 @@ def create_navigation_graph(
     """
     Erzeugt einen regelmäßigen Gitter-Navigationsgraphen.
 
+    zones:
+        GeoDataFrame der LuftVO-Sperrzonen (wie von Map_Preprocessing erzeugt).
+
     Regeln:
     - Gitterknoten liegen im gleichmäßigen Abstand spacing_m.
     - Knoten innerhalb oder auf Sperrzonen werden entfernt.
@@ -164,13 +166,6 @@ def create_navigation_graph(
     Rückgabe:
         (nodes_wgs84, edges_wgs84) – beide als GeoDataFrames in WGS84.
     """
-    zones_path = Path(zones_geojson)
-    nodes_path = Path(output_nodes_geojson)
-    edges_path = Path(output_edges_geojson)
-
-    if not zones_path.exists():
-        raise FileNotFoundError(f"Zonen-Datei nicht gefunden: {zones_path}")
-
     if spacing_m <= 0:
         raise ValueError("spacing_m muss größer als 0 sein.")
 
@@ -180,12 +175,10 @@ def create_navigation_graph(
     if special_connections_per_point < 1:
         raise ValueError("special_connections_per_point muss mindestens 1 sein.")
 
-    # --- Sperrzonen laden, reparieren und zu einer Gesamtfläche vereinigen ---
-
-    zones = gpd.read_file(zones_path)
+    # --- Sperrzonen reparieren und zu einer Gesamtfläche vereinigen ---
 
     if zones.empty:
-        raise ValueError("Die Zonen-Datei enthält keine Features.")
+        raise ValueError("Die Zonen-Daten enthalten keine Features.")
 
     zones        = zones.set_crs(WGS84) if zones.crs is None else zones.to_crs(WGS84)
     zones_metric = zones.to_crs(metric_crs)
@@ -372,19 +365,13 @@ def create_navigation_graph(
         raise ValueError("Es wurden keine erlaubten Kanten erzeugt.")
 
     # ==========================================================================
-    # Schritt 5: Als GeoJSON speichern
+    # Schritt 5: Als GeoDataFrames in WGS84 zurückgeben
     # ==========================================================================
 
     nodes_gdf = gpd.GeoDataFrame(nodes, geometry="geometry", crs=metric_crs)
     edges_gdf = gpd.GeoDataFrame(edges, geometry="geometry", crs=metric_crs)
 
-    nodes_path.parent.mkdir(parents=True, exist_ok=True)
-    edges_path.parent.mkdir(parents=True, exist_ok=True)
-
     nodes_wgs84 = nodes_gdf.to_crs(WGS84)
     edges_wgs84 = edges_gdf.to_crs(WGS84)
-
-    nodes_wgs84.to_file(nodes_path, driver="GeoJSON")
-    edges_wgs84.to_file(edges_path, driver="GeoJSON")
 
     return nodes_wgs84, edges_wgs84
