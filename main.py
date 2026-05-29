@@ -16,9 +16,9 @@ from contextlib import redirect_stdout
 from math import cos, radians
 import io
 
-from GeoJSON_Bearbeiten import create_luftvo_buffer_geojson
-from graph_erstellen import create_navigation_graph as create_grid_graph
-from Wegfindungs import find_path_and_visualize
+from Map_Preprocessing import create_luftvo_buffer_geojson
+from Graph import create_navigation_graph as create_grid_graph
+from Algoritmen import find_path_and_visualize
 
 
 # =============================================================================
