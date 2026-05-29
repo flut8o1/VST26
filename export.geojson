@@ -2,7 +2,7 @@
   "type": "FeatureCollection",
   "generator": "overpass-turbo",
   "copyright": "The data included in this document is from www.openstreetmap.org. The data is made available under ODbL.",
-  "timestamp": "2026-04-25T09:24:34Z",
+  "timestamp": "2026-05-29T14:57:54Z",
   "features": [
     {
       "type": "Feature",
@@ -4449,6 +4449,10 @@
               48.1526761
             ],
             [
+              11.6190737,
+              48.1526762
+            ],
+            [
               11.6191872,
               48.1526761
             ],
@@ -4627,283 +4631,6 @@
         ]
       },
       "id": "relation/1546130"
-    },
-    {
-      "type": "Feature",
-      "properties": {
-        "@id": "relation/6610186",
-        "addr:city": "Unterschleißheim",
-        "addr:country": "DE",
-        "addr:housenumber": "1",
-        "addr:postcode": "85716",
-        "addr:street": "Rathausplatz",
-        "amenity": "townhall",
-        "building": "public",
-        "check_date": "2025-10-18",
-        "name": "Rathaus Unterschleißheim",
-        "phone": "+49 89 310090",
-        "roof:colour": "#666666",
-        "type": "multipolygon",
-        "website": "https://www.unterschleissheim.de/startseite.html"
-      },
-      "geometry": {
-        "type": "Polygon",
-        "coordinates": [
-          [
-            [
-              11.5711145,
-              48.2732475
-            ],
-            [
-              11.5710965,
-              48.2732355
-            ],
-            [
-              11.5710815,
-              48.2732094
-            ],
-            [
-              11.5710032,
-              48.2732089
-            ],
-            [
-              11.5709753,
-              48.2731646
-            ],
-            [
-              11.5709473,
-              48.2731202
-            ],
-            [
-              11.570909,
-              48.2731309
-            ],
-            [
-              11.570844,
-              48.2730276
-            ],
-            [
-              11.5708824,
-              48.2730169
-            ],
-            [
-              11.5708329,
-              48.2729404
-            ],
-            [
-              11.5707151,
-              48.2729405
-            ],
-            [
-              11.5706739,
-              48.2729405
-            ],
-            [
-              11.5706169,
-              48.2729028
-            ],
-            [
-              11.570562,
-              48.2728664
-            ],
-            [
-              11.5705183,
-              48.27288
-            ],
-            [
-              11.5705213,
-              48.2729055
-            ],
-            [
-              11.5702343,
-              48.272985
-            ],
-            [
-              11.5702203,
-              48.2729585
-            ],
-            [
-              11.5702063,
-              48.2729612
-            ],
-            [
-              11.5702057,
-              48.2729519
-            ],
-            [
-              11.5701094,
-              48.2729745
-            ],
-            [
-              11.5701072,
-              48.2729266
-            ],
-            [
-              11.5700586,
-              48.2729385
-            ],
-            [
-              11.5700535,
-              48.2728233
-            ],
-            [
-              11.5701018,
-              48.2728234
-            ],
-            [
-              11.5702017,
-              48.2728216
-            ],
-            [
-              11.5702033,
-              48.2727334
-            ],
-            [
-              11.5702182,
-              48.2727322
-            ],
-            [
-              11.5702148,
-              48.2726599
-            ],
-            [
-              11.5702689,
-              48.2726226
-            ],
-            [
-              11.5701989,
-              48.2725904
-            ],
-            [
-              11.5704242,
-              48.2724406
-            ],
-            [
-              11.5705095,
-              48.2725281
-            ],
-            [
-              11.5705276,
-              48.272518
-            ],
-            [
-              11.5705657,
-              48.2724966
-            ],
-            [
-              11.5705828,
-              48.2725227
-            ],
-            [
-              11.5708542,
-              48.272522
-            ],
-            [
-              11.5708676,
-              48.2724912
-            ],
-            [
-              11.5709514,
-              48.2724947
-            ],
-            [
-              11.570859,
-              48.2726497
-            ],
-            [
-              11.5708905,
-              48.2726691
-            ],
-            [
-              11.5709219,
-              48.2726885
-            ],
-            [
-              11.5709508,
-              48.2726729
-            ],
-            [
-              11.5709859,
-              48.2726962
-            ],
-            [
-              11.5710149,
-              48.2727155
-            ],
-            [
-              11.5711534,
-              48.2728074
-            ],
-            [
-              11.5710783,
-              48.2728586
-            ],
-            [
-              11.5710101,
-              48.2729052
-            ],
-            [
-              11.5710545,
-              48.2729765
-            ],
-            [
-              11.5712062,
-              48.273225
-            ],
-            [
-              11.5711756,
-              48.273232
-            ],
-            [
-              11.5711536,
-              48.2732379
-            ],
-            [
-              11.5711145,
-              48.2732475
-            ]
-          ],
-          [
-            [
-              11.5707015,
-              48.2728236
-            ],
-            [
-              11.5707322,
-              48.2728435
-            ],
-            [
-              11.5707751,
-              48.2728431
-            ],
-            [
-              11.570805,
-              48.2728226
-            ],
-            [
-              11.5708044,
-              48.2727941
-            ],
-            [
-              11.5707737,
-              48.2727742
-            ],
-            [
-              11.5707308,
-              48.2727746
-            ],
-            [
-              11.5707009,
-              48.2727951
-            ],
-            [
-              11.5707015,
-              48.2728236
-            ]
-          ]
-        ]
-      },
-      "id": "relation/6610186"
     },
     {
       "type": "Feature",
@@ -9561,6 +9288,10 @@
               48.08772
             ],
             [
+              11.5576625,
+              48.0876586
+            ],
+            [
               11.5574584,
               48.0875779
             ],
@@ -12243,12 +11974,15 @@
         "@id": "way/27572226",
         "building": "public",
         "building:levels": "1",
+        "building:material": "glass",
         "contact:website": "https://www.finanzamt.bayern/",
         "government": "tax",
         "name": "Finanzamt München Servicezentrum",
         "office": "government",
         "opening_hours": "Mo-We 07:30-16:00; Th 07:30-18:00; Fr 07:30-12:30",
-        "roof:levels": "0"
+        "roof:levels": "0",
+        "roof:shape": "flat",
+        "wheelchair": "yes"
       },
       "geometry": {
         "type": "Polygon",
@@ -13165,43 +12899,43 @@
           [
             [
               11.5768665,
-              48.1431905
+              48.1431904
             ],
             [
-              11.5770535,
-              48.1431506
+              11.5770534,
+              48.1431507
             ],
             [
-              11.5770987,
-              48.143236
+              11.5770996,
+              48.143237
             ],
             [
-              11.5771804,
-              48.1434152
+              11.5771842,
+              48.1434144
             ],
             [
-              11.5772971,
-              48.1436411
+              11.5772935,
+              48.1436432
             ],
             [
               11.576762,
               48.1437575
             ],
             [
-              11.5767058,
-              48.1436403
+              11.5767052,
+              48.1436404
             ],
             [
-              11.5765623,
-              48.1433409
+              11.5765622,
+              48.1433408
             ],
             [
-              11.5769037,
-              48.1432681
+              11.5769036,
+              48.1432682
             ],
             [
               11.5768665,
-              48.1431905
+              48.1431904
             ]
           ]
         ]
@@ -14216,6 +13950,7 @@
       "type": "Feature",
       "properties": {
         "@id": "way/349435519",
+        "check_date": "2026-05-19",
         "check_date:opening_hours": "2024-10-06",
         "government": "social_services",
         "indoor": "room",
@@ -16712,6 +16447,8 @@
       "type": "Feature",
       "properties": {
         "@id": "way/1446522229",
+        "addr:housenumber": "43",
+        "addr:street": "Nymphenburger Straße",
         "amenity": "hospital",
         "healthcare": "hospital",
         "healthcare:speciality": "ophthalmology",
@@ -17383,6 +17120,8 @@
       "properties": {
         "@id": "way/35834768",
         "building": "yes",
+        "check_date": "2026-05-04",
+        "name": "Bayerisches Staatsministerium für Familie, Arbeit und Soziales",
         "office": "government",
         "roof:shape": "hipped",
         "website": "https://www.stmas.bayern.de/"
@@ -17685,11 +17424,11 @@
         "addr:street": "Helene-Weber-Allee",
         "building": "office",
         "building:colour": "silver",
+        "building:levels": "4",
         "contact:email": "dwd.muenchen@dwd.de",
         "contact:fax": "+49 69 8062-9170",
         "contact:phone": "+49 69 8062-0",
         "contact:website": "https://www.dwd.de/DE/Home/home_node.html",
-        "levels": "4",
         "name": "Deutscher Wetterdienst - Niederlassung München",
         "office": "government",
         "opening_hours": "Mo-Th 08:00-15:30; Fr 08:00-14:30",
@@ -18142,10 +17881,12 @@
         "@id": "way/34103818",
         "building": "yes",
         "building:levels": "3",
+        "check_date:opening_hours": "2026-05-11",
         "height": "17 m",
         "name": "Staatliches Bauamt München 2",
         "name:de": "Staatliches Bauamt München 2",
         "office": "government",
+        "opening_hours:signed": "no",
         "roof:colour": "#a8e1c9",
         "roof:shape": "hipped",
         "website": "https://www.stbam2.bayern.de/",
@@ -18747,7 +18488,7 @@
       "properties": {
         "@id": "way/37701742",
         "building": "yes",
-        "check_date": "2025-06-09",
+        "check_date": "2026-05-01",
         "name": "Sozialreferat Jugendamt",
         "office": "government",
         "roof:colour": "6b5543",
@@ -24252,6 +23993,7 @@
         "addr:postcode": "80637",
         "addr:street": "Landshuter Allee",
         "amenity": "police",
+        "check_date": "2026-05-11",
         "contact:fax": "+49 89 54265-128",
         "contact:phone": "+49 89 54265-0",
         "name": "Polizeiinspektion München 42 (Neuhausen)",
@@ -25468,7 +25210,9 @@
         "addr:postcode": "80686",
         "addr:street": "Westendstraße",
         "amenity": "hospital",
+        "check_date": "2026-04-30",
         "name": "Psychosomatische Tagesklinik Westend",
+        "phone": "+49 89 20244480",
         "website": "https://www.tagesklinik-westend.de/"
       },
       "geometry": {
@@ -26633,6 +26377,7 @@
         "addr:postcode": "80797",
         "addr:street": "Infanteriestraße",
         "admin_level": "5",
+        "check_date": "2026-05-04",
         "contact:email": "poststelle@ale-ob.bayern.de",
         "contact:fax": "+49 89 1213 1406",
         "contact:phone": "+49 89 1213 01",
@@ -26715,6 +26460,7 @@
         "addr:housenumber": "5",
         "addr:street": "Infanteriestraße",
         "amenity": "courthouse",
+        "check_date": "2026-05-04",
         "contact:email": "poststelle@ag-m.bayern.de",
         "contact:phone": "+49 89 5597-06",
         "contact:website": "https://www.justiz.bayern.de/gerichte-und-behoerden/amtsgerichte/muenchen/kontakt.php",
@@ -26771,6 +26517,9 @@
         "contact:website": "https://stadt.muenchen.de/infos/hilfen_fuer_gefluechtete_aus_ukraine.html",
         "government": "migration",
         "name": "Erstanlaufstelle für ukrainische Geflüchtete",
+        "name:de": "Erstanlaufstelle für ukrainische Geflüchtete",
+        "name:ru": "Первичный пункт обращения для украинских беженцев",
+        "name:uk": "Перший пункт звернення для українських біженців",
         "office": "government",
         "opening_hours": "Mo-Fr 08:00-16:00",
         "operator": "Kreisverwaltungsreferat München"
@@ -27094,8 +26843,8 @@
       "geometry": {
         "type": "Point",
         "coordinates": [
-          11.5707141,
-          48.2728735
+          11.570706,
+          48.2728498
         ]
       },
       "id": "node/4418168575"

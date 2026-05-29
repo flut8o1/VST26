@@ -29,7 +29,7 @@ from Algoritmen import find_path_and_visualize
 # Eingabe / Ausgabe
 # =============================================================================
 
-INPUT_GEOJSON_NAME    = "GeoDaten_ohne_Naturschutz.geojson"
+INPUT_GEOJSON_NAME    = "export.geojson"
 OUTPUT_ROUTE_MAP_NAME = "route_karte.png"
 
 
