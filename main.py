@@ -29,7 +29,7 @@ from Algoritmen import find_path_and_visualize
 # Eingabe / Ausgabe
 # =============================================================================
 
-INPUT_GEOJSON_NAME    = "export.geojson"
+INPUT_GEOJSON_NAME    = "GeoDaten_ohne_Naturschutz.geojson"
 OUTPUT_ROUTE_MAP_NAME = "route_karte.png"
 
 
@@ -48,8 +48,8 @@ ZONE_BUFFER_RESOLUTION = 8
 # Gitter-Netz-Einstellungen
 # =============================================================================
 
-# Abstand der Gitterknoten in Metern
-NETZ_AUFLOESUNG_M = 250
+# Abstand der Gitterknoten in Metern (kleiner = feiner, aber mehr Knoten/Kanten)
+NETZ_AUFLOESUNG_M = 50
 
 # True = zusätzlich diagonale Nachbarknoten verbinden
 DIAGONALE_VERBINDUNGEN = False
@@ -198,7 +198,7 @@ def main():
 
     start = perf_counter()
 
-    nodes, edges = create_grid_graph(
+    grid = create_grid_graph(
         zones=zones,
 
         spacing_m=NETZ_AUFLOESUNG_M,
@@ -229,12 +229,10 @@ def main():
         # erfolgt im Abschnitt "Abschlussinformationen" weiter unten.
         with redirect_stdout(io.StringIO()):
             route_result = find_path_and_visualize(
-                nodes=nodes,
-                edges=edges,
+                grid,
                 zones=zones,
                 output_png=base_dir / OUTPUT_ROUTE_MAP_NAME,
                 algorithm=WEGSUCHE_ALGORITHMUS,
-                directed=False,
                 show_map=WEGSUCHE_KARTE_ANZEIGEN,
                 satellite_background=SATELLITE_BACKGROUND,
                 basemap_zoom=BASEMAP_ZOOM,
@@ -267,8 +265,8 @@ def main():
     print("=" * 77)
     print("ZUSAMMENFASSUNG")
     print("=" * 77)
-    print(f"Knoten erzeugt:               {len(nodes)}")
-    print(f"Kanten erzeugt:               {len(edges)}")
+    print(f"Knoten erzeugt:               {len(grid.nodes_gdf)}")
+    print(f"Kanten erzeugt:               {len(grid.edges_gdf)}")
     print()
     print("KARTEN:")
     print(f"  Satellitenhintergrund:        {_ja_nein(SATELLITE_BACKGROUND)}")
