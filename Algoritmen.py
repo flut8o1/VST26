@@ -1,9 +1,11 @@
 """
 Algoritmen.py – Kürzeste-Weg-Suche im Navigationsgraphen.
 
-Liest den erzeugten Graphen (Knoten + Kanten als GeoJSON) ein,
+Erhält den erzeugten Graphen (Knoten + Kanten als GeoDataFrames) im Speicher,
 sucht den kürzesten Weg zwischen Start- und Endknoten mit Dijkstra oder A*
 und visualisiert das Ergebnis als PNG-Karte.
+
+Einzige Ausgabedatei ist die PNG – Route und Graph bleiben im Speicher.
 """
 
 from pathlib import Path
@@ -12,7 +14,7 @@ from math import sqrt
 
 from utils import (
     WGS84, WEB_MERCATOR, DEFAULT_METRIC_CRS,
-    read_geojson, get_fixed_extent_web_mercator,
+    get_fixed_extent_web_mercator,
     setup_map_figure, save_map_figure,
 )
 
@@ -29,7 +31,7 @@ def _find_start_end_node_ids(nodes_gdf):
     Start- bzw. Endknoten vorhanden ist.
     """
     if "node_kind" not in nodes_gdf.columns:
-        raise ValueError("In graph_nodes.geojson fehlt die Spalte 'node_kind'.")
+        raise ValueError("Im Knoten-GeoDataFrame fehlt die Spalte 'node_kind'.")
 
     start_nodes = nodes_gdf[nodes_gdf["node_kind"] == "start"]
     end_nodes   = nodes_gdf[nodes_gdf["node_kind"] == "end"]
@@ -58,7 +60,7 @@ def _build_adjacency(edges_gdf, *, directed=False):
     missing = required_columns - set(edges_gdf.columns)
 
     if missing:
-        raise ValueError(f"In graph_edges.geojson fehlen Spalten: {missing}")
+        raise ValueError(f"Im Kanten-GeoDataFrame fehlen Spalten: {missing}")
 
     adjacency = {}
 
@@ -210,20 +212,18 @@ def _astar(adjacency, nodes_metric, start_node_id, end_node_id):
 
 
 # =============================================================================
-# Route als GeoJSON speichern
+# Route aus dem Graphen extrahieren
 # =============================================================================
 
-def _create_route_geojsons(
+def _extract_route(
     *,
     nodes_metric,
     edges_metric,
     node_path,
     edge_path,
-    output_route_nodes_geojson,
-    output_route_edges_geojson,
 ):
     """
-    Extrahiert die Route aus dem Graphen und speichert sie als GeoJSON.
+    Extrahiert die gefundene Route aus dem Graphen.
 
     Rückgabe:
         (route_nodes_wgs84, route_edges_wgs84) – beide als GeoDataFrames in WGS84.
@@ -243,19 +243,7 @@ def _create_route_geojsons(
     route_edges["route_order"] = route_edges["edge_id_int"].map(edge_order_by_id)
     route_edges              = route_edges.sort_values("route_order")
 
-    route_nodes_wgs84 = route_nodes.to_crs(WGS84)
-    route_edges_wgs84 = route_edges.to_crs(WGS84)
-
-    output_route_nodes_geojson = Path(output_route_nodes_geojson)
-    output_route_edges_geojson = Path(output_route_edges_geojson)
-
-    output_route_nodes_geojson.parent.mkdir(parents=True, exist_ok=True)
-    output_route_edges_geojson.parent.mkdir(parents=True, exist_ok=True)
-
-    route_nodes_wgs84.to_file(output_route_nodes_geojson, driver="GeoJSON")
-    route_edges_wgs84.to_file(output_route_edges_geojson, driver="GeoJSON")
-
-    return route_nodes_wgs84, route_edges_wgs84
+    return route_nodes.to_crs(WGS84), route_edges.to_crs(WGS84)
 
 
 # =============================================================================
@@ -264,11 +252,11 @@ def _create_route_geojsons(
 
 def _visualize_route_png(
     *,
-    nodes_geojson,
-    edges_geojson,
-    route_nodes_geojson,
-    route_edges_geojson,
-    zones_geojson,
+    nodes,
+    edges,
+    route_nodes,
+    route_edges,
+    zones,
     output_png,
     show_map=True,
     satellite_background=True,
@@ -280,6 +268,8 @@ def _visualize_route_png(
 ):
     """
     Erzeugt eine PNG-Karte mit dem gesamten Graphen und der gefundenen Route.
+
+    Alle Ebenen werden als GeoDataFrames übergeben (kein Datei-Zugriff).
 
     Ebenen (von unten nach oben):
         1. Satellitenhintergrund (optional)
@@ -294,15 +284,14 @@ def _visualize_route_png(
         Path-Objekt der gespeicherten PNG-Datei.
     """
 
-    # Alle Layer einlesen und in Web Mercator projizieren.
-    nodes       = read_geojson(nodes_geojson).to_crs(WEB_MERCATOR)
-    edges       = read_geojson(edges_geojson).to_crs(WEB_MERCATOR)
-    route_nodes = read_geojson(route_nodes_geojson).to_crs(WEB_MERCATOR)
-    route_edges = read_geojson(route_edges_geojson).to_crs(WEB_MERCATOR)
+    # Alle Layer in Web Mercator projizieren.
+    nodes       = nodes.to_crs(WEB_MERCATOR)
+    edges       = edges.to_crs(WEB_MERCATOR)
+    route_nodes = route_nodes.to_crs(WEB_MERCATOR)
+    route_edges = route_edges.to_crs(WEB_MERCATOR)
 
-    zones = None
-    if zones_geojson is not None:
-        zones = read_geojson(zones_geojson).to_crs(WEB_MERCATOR)
+    if zones is not None:
+        zones = zones.to_crs(WEB_MERCATOR)
 
     # Kartenausschnitt bestimmen.
     if fixed_extent:
@@ -355,12 +344,10 @@ def _visualize_route_png(
 # =============================================================================
 
 def find_path_and_visualize(
-    nodes_geojson,
-    edges_geojson,
+    nodes,
+    edges,
     *,
-    zones_geojson=None,
-    output_route_nodes_geojson="route_nodes.geojson",
-    output_route_edges_geojson="route_edges.geojson",
+    zones=None,
     output_png="route_karte.png",
     algorithm="dijkstra",
     directed=False,
@@ -376,6 +363,11 @@ def find_path_and_visualize(
     """
     Sucht den kürzesten Weg im Navigationsgraphen und visualisiert ihn.
 
+    nodes / edges:
+        GeoDataFrames des Graphen (wie von Graph.create_navigation_graph erzeugt).
+    zones:
+        Optionales GeoDataFrame der Sperrzonen für die Kartendarstellung.
+
     algorithm:
         "dijkstra" – Dijkstra-Algorithmus (optimal, keine Heuristik).
         "astar"    – A*-Algorithmus (schneller durch euklidische Heuristik).
@@ -384,17 +376,14 @@ def find_path_and_visualize(
         True  – Kanten gelten nur in Richtung from_node -> to_node.
 
     Rückgabe:
-        Dict mit Ergebniskennzahlen (Algorithmus, Länge, Laufzeit, Dateipfade).
+        Dict mit Ergebniskennzahlen (Algorithmus, Länge, Knoten-/Kantenzahl, PNG-Pfad).
     """
     algorithm = algorithm.lower().strip()
 
     if algorithm not in {"dijkstra", "astar"}:
         raise ValueError("algorithm muss 'dijkstra' oder 'astar' sein.")
 
-    # --- Graph einlesen ---
-
-    nodes = read_geojson(nodes_geojson)
-    edges = read_geojson(edges_geojson)
+    # --- Graph in metrisches CRS bringen ---
 
     nodes_metric = nodes.to_crs(metric_crs)
     edges_metric = edges.to_crs(metric_crs)
@@ -422,27 +411,25 @@ def find_path_and_visualize(
             end_node_id=end_node_id,
         )
 
-    # --- Route als GeoJSON speichern ---
+    # --- Route aus dem Graphen extrahieren (im Speicher) ---
 
-    _create_route_geojsons(
+    route_nodes_wgs84, route_edges_wgs84 = _extract_route(
         nodes_metric=nodes_metric,
         edges_metric=edges_metric,
         node_path=node_path,
         edge_path=edge_path,
-        output_route_nodes_geojson=output_route_nodes_geojson,
-        output_route_edges_geojson=output_route_edges_geojson,
     )
 
     total_graph_length_m = float(edges_metric["length_m"].astype(float).sum())
 
-    # --- Karte erzeugen ---
+    # --- Karte erzeugen (einzige Ausgabedatei) ---
 
     map_file = _visualize_route_png(
-        nodes_geojson=nodes_geojson,
-        edges_geojson=edges_geojson,
-        route_nodes_geojson=output_route_nodes_geojson,
-        route_edges_geojson=output_route_edges_geojson,
-        zones_geojson=zones_geojson,
+        nodes=nodes,
+        edges=edges,
+        route_nodes=route_nodes_wgs84,
+        route_edges=route_edges_wgs84,
+        zones=zones,
         output_png=output_png,
         show_map=show_map,
         satellite_background=satellite_background,
@@ -463,7 +450,5 @@ def find_path_and_visualize(
         "total_graph_length_km": total_graph_length_m / 1000,
         "route_node_count":      len(node_path),
         "route_edge_count":      len(edge_path),
-        "route_nodes_geojson":   Path(output_route_nodes_geojson),
-        "route_edges_geojson":   Path(output_route_edges_geojson),
         "route_map_png":         map_file,
     }
