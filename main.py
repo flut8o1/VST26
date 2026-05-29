@@ -6,6 +6,10 @@ Gesamte Pipeline in drei Schritten:
     2. Graph erstellen     – Navigationsnetz (Gitter) aufbauen.
     3. Wegsuche            – Kürzesten Weg mit Dijkstra oder A* finden.
 
+Die Schritte reichen ihre Ergebnisse als GeoDataFrames im Speicher weiter.
+Einzige erzeugte Datei ist die Routenkarte (route_karte.png) – es werden
+keine Zwischen-GeoJSON geschrieben.
+
 Alle Einstellungen befinden sich ausschließlich in den Konfigurations-
 abschnitten direkt unterhalb dieser Modulbeschreibung.
 """
@@ -30,7 +34,7 @@ OUTPUT_ROUTE_MAP_NAME = "route_karte.png"
 
 
 # =============================================================================
-# Puffer-Einstellungen (GeoJSON_Bearbeiten.py)
+# Puffer-Einstellungen (Map_Preprocessing.py)
 # =============================================================================
 
 # Anzahl der Ecken für Punkt-Polygone (höher = runder)
@@ -163,9 +167,8 @@ def main():
 
     start = perf_counter()
 
-    create_luftvo_buffer_geojson(
+    zones = create_luftvo_buffer_geojson(
         input_geojson=base_dir / INPUT_GEOJSON_NAME,
-        output_geojson=base_dir / "drohnen_luftvo_zonen.geojson",
 
         hospital_radius_m=100,
         police_radius_m=100,
@@ -196,9 +199,7 @@ def main():
     start = perf_counter()
 
     nodes, edges = create_grid_graph(
-        zones_geojson=base_dir / "drohnen_luftvo_zonen.geojson",
-        output_nodes_geojson=base_dir / "graph_nodes.geojson",
-        output_edges_geojson=base_dir / "graph_edges.geojson",
+        zones=zones,
 
         spacing_m=NETZ_AUFLOESUNG_M,
         connect_diagonal=DIAGONALE_VERBINDUNGEN,
@@ -224,15 +225,13 @@ def main():
     if WEGSUCHE_AUSFUEHREN:
         start = perf_counter()
 
-        # Verbose-Ausgaben aus Wegfindungs.py unterdrücken – Zusammenfassung
+        # Verbose-Ausgaben aus Algoritmen.py unterdrücken – Zusammenfassung
         # erfolgt im Abschnitt "Abschlussinformationen" weiter unten.
         with redirect_stdout(io.StringIO()):
             route_result = find_path_and_visualize(
-                nodes_geojson=base_dir / "graph_nodes.geojson",
-                edges_geojson=base_dir / "graph_edges.geojson",
-                zones_geojson=base_dir / "drohnen_luftvo_zonen.geojson",
-                output_route_nodes_geojson=base_dir / "route_nodes.geojson",
-                output_route_edges_geojson=base_dir / "route_edges.geojson",
+                nodes=nodes,
+                edges=edges,
+                zones=zones,
                 output_png=base_dir / OUTPUT_ROUTE_MAP_NAME,
                 algorithm=WEGSUCHE_ALGORITHMUS,
                 directed=False,
