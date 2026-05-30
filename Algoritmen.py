@@ -42,8 +42,6 @@ def _make_neighbor_function(grid):
     n_rows, n_cols   = grid.n_rows, grid.n_cols
     passable         = grid.passable
     spacing          = grid.spacing_m
-    diagonal         = spacing * math.sqrt(2)
-    connect_diagonal = grid.connect_diagonal
     start_id, end_id = grid.start_id, grid.end_id
 
     # Rückverbindungen: von einem Gitterknoten zurück zum Start-/Endknoten.
@@ -71,17 +69,6 @@ def _make_neighbor_function(grid):
             result.append(((row + 1) * n_cols + col, spacing))
         if row - 1 >= 0 and passable["S"][row, col]:
             result.append(((row - 1) * n_cols + col, spacing))
-
-        # Diagonale Nachbarn.
-        if connect_diagonal:
-            if row + 1 < n_rows and col + 1 < n_cols and passable["NE"][row, col]:
-                result.append(((row + 1) * n_cols + (col + 1), diagonal))
-            if row + 1 < n_rows and col - 1 >= 0 and passable["NW"][row, col]:
-                result.append(((row + 1) * n_cols + (col - 1), diagonal))
-            if row - 1 >= 0 and col + 1 < n_cols and passable["SE"][row, col]:
-                result.append(((row - 1) * n_cols + (col + 1), diagonal))
-            if row - 1 >= 0 and col - 1 >= 0 and passable["SW"][row, col]:
-                result.append(((row - 1) * n_cols + (col - 1), diagonal))
 
         # Anbindung an Start-/Endknoten, falls dieser Gitterknoten verbunden ist.
         if node_id in back:
@@ -142,9 +129,6 @@ def _dijkstra(neighbors, start_id, end_id):
                 previous[neighbor]  = current_node
                 heappush(queue, (new_distance, neighbor))
 
-    if end_id not in distances:
-        raise ValueError("Dijkstra konnte keinen Weg finden.")
-
     return _reconstruct_path(previous, start_id, end_id), distances[end_id]
 
 
@@ -181,9 +165,6 @@ def _astar(neighbors, heuristic, start_id, end_id):
                 g_score[neighbor]  = tentative_g
                 previous[neighbor] = current_node
                 heappush(queue, (tentative_g + heuristic(neighbor), tentative_g, neighbor))
-
-    if end_id not in g_score:
-        raise ValueError("A* konnte keinen Weg finden.")
 
     return _reconstruct_path(previous, start_id, end_id), g_score[end_id]
 
@@ -328,11 +309,6 @@ def find_path_and_visualize(
     Rückgabe:
         Dict mit Ergebniskennzahlen (Algorithmus, Länge, Knotenzahl, PNG-Pfad).
     """
-    algorithm = algorithm.lower().strip()
-
-    if algorithm not in {"dijkstra", "astar"}:
-        raise ValueError("algorithm muss 'dijkstra' oder 'astar' sein.")
-
     neighbors = _make_neighbor_function(grid)
 
     # --- Wegsuche direkt auf der Matrix ---

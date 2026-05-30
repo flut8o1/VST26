@@ -16,9 +16,7 @@ abschnitten direkt unterhalb dieser Modulbeschreibung.
 
 from pathlib import Path
 from time import perf_counter
-from contextlib import redirect_stdout
 from math import cos, radians
-import io
 
 from Map_Preprocessing import create_luftvo_buffer_geojson
 from Graph import create_navigation_graph as create_grid_graph
@@ -51,9 +49,6 @@ ZONE_BUFFER_RESOLUTION = 8
 # Abstand der Gitterknoten in Metern (kleiner = feiner, aber mehr Knoten/Kanten)
 NETZ_AUFLOESUNG_M = 50
 
-# True = zusätzlich diagonale Nachbarknoten verbinden
-DIAGONALE_VERBINDUNGEN = False
-
 # Zusätzlicher Rand um die Bounding Box der Zonen in Metern (0 = kein Rand)
 GRAPH_BBOX_PADDING_M = 0
 
@@ -78,9 +73,6 @@ START_END_VERBINDUNGEN_PRO_PUNKT = 5
 # Wegsuche
 # =============================================================================
 
-# True = Wegsuche durchführen und Ergebnis speichern
-WEGSUCHE_AUSFUEHREN = True
-
 # "dijkstra" oder "astar"
 WEGSUCHE_ALGORITHMUS = "astar"
 
@@ -104,20 +96,6 @@ PNG_CENTER_LON = 11.5953
 
 # Seitenlänge des quadratischen Ausschnitts in Kilometern
 PNG_SQUARE_SIDE_KM = 15
-
-# True = fester Ausschnitt (oben), False = Ausschnitt aus Datengrenzen
-PNG_FESTER_AUSSCHNITT = True
-
-
-# =============================================================================
-# Graph-Begrenzung auf den sichtbaren Bereich
-# =============================================================================
-
-# True = Graph wird auf den PNG-Ausschnitt begrenzt.
-# Knoten außerhalb des sichtbaren Quadrats werden nicht erzeugt, sodass der
-# Algorithmus keine Route außerhalb des Ausschnitts finden kann.
-# Hat nur Wirkung wenn PNG_FESTER_AUSSCHNITT = True.
-GRAPH_AUF_PNG_BEGRENZEN = True
 
 
 # =============================================================================
@@ -146,20 +124,15 @@ def main():
     base_dir = Path(__file__).parent
 
     # Bounding Box des PNG-Ausschnitts als harte Graph-Grenze berechnen.
-    # Ist PNG_FESTER_AUSSCHNITT oder GRAPH_AUF_PNG_BEGRENZEN deaktiviert,
-    # bleibt graph_bbox_wgs84 None und der Graph wird nicht beschnitten.
-    if PNG_FESTER_AUSSCHNITT and GRAPH_AUF_PNG_BEGRENZEN:
-        _half   = PNG_SQUARE_SIDE_KM / 2.0
-        _dlat   = _half / 111.32
-        _dlon   = _half / (111.32 * cos(radians(PNG_CENTER_LAT)))
-        graph_bbox_wgs84 = (
-            PNG_CENTER_LAT - _dlat,
-            PNG_CENTER_LON - _dlon,
-            PNG_CENTER_LAT + _dlat,
-            PNG_CENTER_LON + _dlon,
-        )
-    else:
-        graph_bbox_wgs84 = None
+    _half   = PNG_SQUARE_SIDE_KM / 2.0
+    _dlat   = _half / 111.32
+    _dlon   = _half / (111.32 * cos(radians(PNG_CENTER_LAT)))
+    graph_bbox_wgs84 = (
+        PNG_CENTER_LAT - _dlat,
+        PNG_CENTER_LON - _dlon,
+        PNG_CENTER_LAT + _dlat,
+        PNG_CENTER_LON + _dlon,
+    )
 
     # -------------------------------------------------------------------------
     # Schritt 1: GeoJSON bearbeiten – OSM-Daten klassifizieren und puffern
@@ -202,7 +175,6 @@ def main():
         zones=zones,
 
         spacing_m=NETZ_AUFLOESUNG_M,
-        connect_diagonal=DIAGONALE_VERBINDUNGEN,
         bbox_padding_m=GRAPH_BBOX_PADDING_M,
         max_bbox_wgs84=graph_bbox_wgs84,
 
@@ -219,30 +191,23 @@ def main():
     # Schritt 3: Wegsuche – kürzesten Weg finden
     # -------------------------------------------------------------------------
 
-    loesungs_laufzeit_s = None
-    route_result        = None
+    start = perf_counter()
 
-    if WEGSUCHE_AUSFUEHREN:
-        start = perf_counter()
+    route_result = find_path_and_visualize(
+        grid,
+        zones=zones,
+        output_png=base_dir / OUTPUT_ROUTE_MAP_NAME,
+        algorithm=WEGSUCHE_ALGORITHMUS,
+        show_map=WEGSUCHE_KARTE_ANZEIGEN,
+        satellite_background=SATELLITE_BACKGROUND,
+        basemap_zoom=BASEMAP_ZOOM,
+        fixed_extent=True,
+        center_lat=PNG_CENTER_LAT,
+        center_lon=PNG_CENTER_LON,
+        square_side_km=PNG_SQUARE_SIDE_KM,
+    )
 
-        # Verbose-Ausgaben aus Algoritmen.py unterdrücken – Zusammenfassung
-        # erfolgt im Abschnitt "Abschlussinformationen" weiter unten.
-        with redirect_stdout(io.StringIO()):
-            route_result = find_path_and_visualize(
-                grid,
-                zones=zones,
-                output_png=base_dir / OUTPUT_ROUTE_MAP_NAME,
-                algorithm=WEGSUCHE_ALGORITHMUS,
-                show_map=WEGSUCHE_KARTE_ANZEIGEN,
-                satellite_background=SATELLITE_BACKGROUND,
-                basemap_zoom=BASEMAP_ZOOM,
-                fixed_extent=PNG_FESTER_AUSSCHNITT,
-                center_lat=PNG_CENTER_LAT,
-                center_lon=PNG_CENTER_LON,
-                square_side_km=PNG_SQUARE_SIDE_KM,
-            )
-
-        loesungs_laufzeit_s = perf_counter() - start
+    loesungs_laufzeit_s = perf_counter() - start
 
     # -------------------------------------------------------------------------
     # Abschlussinformationen
@@ -250,17 +215,12 @@ def main():
 
     gesamte_laufzeit_s = perf_counter() - gesamte_laufzeit_start
 
-    if route_result is not None:
-        algorithmus_text       = "AStar" if route_result["algorithm"] == "astar" else "Dijkstra"
-        laenge_text            = (
-            f"{route_result['route_length_m']:.2f} m / "
-            f"{route_result['route_length_km']:.3f} km"
-        )
-        loesungs_laufzeit_text = f"{loesungs_laufzeit_s:.3f} s"
-    else:
-        algorithmus_text       = "-"
-        laenge_text            = "-"
-        loesungs_laufzeit_text = "-"
+    algorithmus_text       = "AStar" if route_result["algorithm"] == "astar" else "Dijkstra"
+    laenge_text            = (
+        f"{route_result['route_length_m']:.2f} m / "
+        f"{route_result['route_length_km']:.3f} km"
+    )
+    loesungs_laufzeit_text = f"{loesungs_laufzeit_s:.3f} s"
 
     print("=" * 77)
     print("ZUSAMMENFASSUNG")

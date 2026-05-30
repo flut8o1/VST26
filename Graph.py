@@ -32,10 +32,9 @@ from utils import WGS84, DEFAULT_METRIC_CRS, get_geometry_union, wgs84_to_metric
 # Richtungs-Offsets (dr, dc): dr entlang der Zeilen (Norden positiv),
 # dc entlang der Spalten (Osten positiv).
 _ORTHO = {"E": (0, 1), "W": (0, -1), "N": (1, 0), "S": (-1, 0)}
-_DIAG  = {"NE": (1, 1), "NW": (1, -1), "SE": (-1, 1), "SW": (-1, -1)}
 
 # Zu jeder getesteten Vorwärtsrichtung die entgegengesetzte Richtung.
-_REVERSE = {"E": "W", "N": "S", "NE": "SW", "NW": "SE"}
+_REVERSE = {"E": "W", "N": "S"}
 
 
 # =============================================================================
@@ -78,7 +77,6 @@ class NavigationGrid:
     metric_crs: str
     node_valid: np.ndarray
     passable: dict
-    connect_diagonal: bool
     start_xy: tuple
     end_xy: tuple
     start_connections: list
@@ -125,9 +123,6 @@ def _compute_node_valid(minx, miny, spacing_m, n_rows, n_cols, metric_crs, zones
 
     valid = np.ones(n_rows * n_cols, dtype=bool)
     valid[np.asarray(inside.index.unique(), dtype=int)] = False
-
-    if not valid.any():
-        raise ValueError("Es wurden keine erlaubten Gitterknoten erzeugt.")
 
     return valid.reshape(n_rows, n_cols)
 
@@ -217,7 +212,7 @@ def _set_reverse(passable, name, dr, dc, forward):
     reverse[dst_r, dst_c] = forward[src_r, src_c]
 
 
-def _compute_edges(node_valid, minx, miny, spacing_m, metric_crs, zones_metric, connect_diagonal):
+def _compute_edges(node_valid, minx, miny, spacing_m, metric_crs, zones_metric):
     """
     Baut die Passierbarkeits-Matrix für alle Richtungen auf.
 
@@ -230,16 +225,12 @@ def _compute_edges(node_valid, minx, miny, spacing_m, metric_crs, zones_metric, 
         total_len   – Gesamtlänge aller Kanten in Metern.
     """
     n_rows, n_cols = node_valid.shape
-    passable = {d: np.zeros((n_rows, n_cols), dtype=bool) for d in (*_ORTHO, *_DIAG)}
-
-    forward_dirs = [("E", 0, 1), ("N", 1, 0)]
-    if connect_diagonal:
-        forward_dirs += [("NE", 1, 1), ("NW", 1, -1)]
+    passable = {d: np.zeros((n_rows, n_cols), dtype=bool) for d in _ORTHO}
 
     edge_lines = []
     total_len  = 0.0
 
-    for name, dr, dc in forward_dirs:
+    for name, dr, dc in [("E", 0, 1), ("N", 1, 0)]:
         forward, lines, length = _test_direction(
             node_valid, dr, dc, minx, miny, spacing_m, metric_crs, zones_metric
         )
@@ -263,8 +254,6 @@ def _connect_special(point, node_valid, minx, miny, spacing_m, n_cols,
     Rückgabe:
         connections – [(grid_node_id, length_m), ...]
         lines       – Verbindungslinien als LineString (zum Zeichnen).
-
-    Wirft ValueError, wenn kein sichtbarer Gitterknoten erreichbar ist.
     """
     rows, cols = np.nonzero(node_valid)
     xs = minx + cols * spacing_m
@@ -293,12 +282,6 @@ def _connect_special(point, node_valid, minx, miny, spacing_m, n_cols,
         if len(connections) >= max_connections:
             break
 
-    if not connections:
-        raise ValueError(
-            f"Für {label} konnte kein sichtbarer Gitterknoten "
-            f"ohne Schnitt durch eine Sperrzone gefunden werden."
-        )
-
     return connections, lines
 
 
@@ -321,7 +304,6 @@ def create_navigation_graph(
     *,
     spacing_m=250,
     metric_crs=DEFAULT_METRIC_CRS,
-    connect_diagonal=False,
     bbox_padding_m=0,
     max_bbox_wgs84=None,
     start_lat=None,
@@ -340,26 +322,13 @@ def create_navigation_graph(
     - Gitterknoten liegen im gleichmäßigen Abstand spacing_m.
     - Knoten innerhalb oder auf Sperrzonen werden entfernt.
     - Kanten, die Sperrzonen schneiden, werden entfernt.
-    - Ohne Diagonalen: nur West-Ost- und Nord-Süd-Verbindungen.
-    - Mit Diagonalen: zusätzlich direkte Diagonalverbindungen.
+    - Nur West-Ost- und Nord-Süd-Verbindungen (keine Diagonalen).
     - Start- und Endpunkt werden als Sonderknoten geführt und mit den
       nächsten sichtbaren Gitterknoten verbunden.
 
     Rückgabe:
         NavigationGrid – Matrix-Darstellung samt Zeichengeometrie.
     """
-    if spacing_m <= 0:
-        raise ValueError("spacing_m muss größer als 0 sein.")
-
-    if bbox_padding_m < 0:
-        raise ValueError("bbox_padding_m darf nicht negativ sein.")
-
-    if special_connections_per_point < 1:
-        raise ValueError("special_connections_per_point muss mindestens 1 sein.")
-
-    if None in (start_lat, start_lon, end_lat, end_lon):
-        raise ValueError("Start- und Endpunkt müssen vollständig angegeben werden.")
-
     if zones.empty:
         raise ValueError("Die Zonen-Daten enthalten keine Features.")
 
@@ -405,9 +374,6 @@ def create_navigation_graph(
         maxx = min(maxx, ne.x)
         maxy = min(maxy, ne.y)
 
-    if maxx < minx or maxy < miny:
-        raise ValueError("Ungültiger Kartenbereich – die Bounding Box ist leer.")
-
     spacing_m = float(spacing_m)
     n_cols = int((maxx - minx) // spacing_m) + 1
     n_rows = int((maxy - miny) // spacing_m) + 1
@@ -417,7 +383,7 @@ def create_navigation_graph(
     node_valid = _compute_node_valid(minx, miny, spacing_m, n_rows, n_cols, metric_crs, zones_metric)
 
     passable, edge_lines, total_len = _compute_edges(
-        node_valid, minx, miny, spacing_m, metric_crs, zones_metric, connect_diagonal
+        node_valid, minx, miny, spacing_m, metric_crs, zones_metric
     )
 
     # --- Start/Ende mit den nächsten sichtbaren Gitterknoten verbinden ---
@@ -450,7 +416,6 @@ def create_navigation_graph(
         metric_crs=metric_crs,
         node_valid=node_valid,
         passable=passable,
-        connect_diagonal=connect_diagonal,
         start_xy=(start_pt.x, start_pt.y),
         end_xy=(end_pt.x, end_pt.y),
         start_connections=start_connections,

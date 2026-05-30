@@ -30,21 +30,8 @@ def _norm(value):
 
 
 def _get_tag(props, key):
-    """
-    Liest einen OSM-Tag robust aus den Feature-Properties.
-
-    Unterstützt sowohl flache GeoJSON-Properties als auch verschachtelte
-    Tags-Objekte, wie sie manche Overpass-Exporte erzeugen.
-    """
-    if key in props:
-        return props.get(key)
-
-    # Einige Overpass-Exporte bündeln alle Tags unter einem "tags"-Schlüssel.
-    tags = props.get("tags")
-    if isinstance(tags, dict):
-        return tags.get(key)
-
-    return None
+    """Liest einen OSM-Tag aus den Feature-Properties."""
+    return props.get(key)
 
 
 # =============================================================================
@@ -166,11 +153,8 @@ def _create_regular_polygon(point, radius_m, corners):
     radius_m:
         Umkreisradius in Metern.
     corners:
-        Anzahl der Ecken (mindestens 3).
+        Anzahl der Ecken.
     """
-    if corners < 3:
-        raise ValueError("polygon_corners muss mindestens 3 sein.")
-
     x, y = point.x, point.y
 
     # Gleichmäßig verteilte Punkte auf einem Kreis mit dem Umkreisradius.
@@ -278,12 +262,6 @@ def create_luftvo_buffer_geojson(
 
     if not input_path.exists():
         raise FileNotFoundError(f"Eingabedatei nicht gefunden: {input_path}")
-
-    if polygon_corners < 3:
-        raise ValueError("polygon_corners muss mindestens 3 sein.")
-
-    if zone_buffer_resolution < 1:
-        raise ValueError("zone_buffer_resolution muss mindestens 1 sein.")
 
     # --- Schritt 1: Eingabe einlesen und CRS normalisieren ---
 
