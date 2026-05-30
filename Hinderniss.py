@@ -26,10 +26,6 @@ from Visualisierung import build_route_geometries, draw_route_layers
 from utils import WGS84, WEB_MERCATOR, DEFAULT_METRIC_CRS, get_fixed_extent_web_mercator
 
 
-# Standardradius eines per Mausklick gesetzten Hindernisses (in Metern).
-HINDERNIS_RADIUS_M = 100
-
-
 class InteractivePlanner:
     """
     Interaktive Routenkarte mit per Mausklick gesetzten Hindernissen.
@@ -49,7 +45,7 @@ class InteractivePlanner:
         square_side_km,
         satellite_background=True,
         basemap_zoom=13,
-        obstacle_radius_m=HINDERNIS_RADIUS_M,
+        obstacle_radius_m=100,
         metric_crs=DEFAULT_METRIC_CRS,
     ):
         """
@@ -208,3 +204,8 @@ class InteractivePlanner:
         length_m = self._rebuild()
         self._render(status=f"Route: {length_m:.0f} m / {length_m / 1000:.3f} km")
         plt.show()
+        return {
+            "algorithm":       self.algorithm,
+            "route_length_m":  length_m,
+            "route_length_km": length_m / 1000,
+        }

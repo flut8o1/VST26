@@ -80,10 +80,13 @@ WEGSUCHE_ALGORITHMUS = "astar"
 # True = Routenkarte nach Erzeugung anzeigen
 WEGSUCHE_KARTE_ANZEIGEN = True
 
-# True = interaktives Fenster öffnen: ein Linksklick fügt ein 100-m-Hindernis
+# True = interaktives Fenster öffnen: ein Linksklick fügt ein Hindernis
 # hinzu, baut den Graphen neu auf und sucht eine neue Route (Hinderniss.py).
 # In diesem Modus wird keine PNG-Datei geschrieben.
 INTERAKTIVE_HINDERNISSE = True
+
+# Radius eines per Mausklick gesetzten Hindernisses (in Metern)
+HINDERNIS_RADIUS_M = 100
 
 
 # =============================================================================
@@ -188,9 +191,9 @@ def main():
     # -------------------------------------------------------------------------
 
     if INTERAKTIVE_HINDERNISSE:
-        print("Interaktiver Modus: Linksklick ins Fenster setzt ein 100-m-Hindernis.")
+        print(f"Interaktiver Modus: Linksklick ins Fenster setzt ein {HINDERNIS_RADIUS_M}-m-Hindernis.")
         print()
-        InteractivePlanner(
+        planner = InteractivePlanner(
             zones=zones,
             graph_kwargs=graph_kwargs,
             algorithm=WEGSUCHE_ALGORITHMUS,
@@ -199,40 +202,44 @@ def main():
             square_side_km=PNG_SQUARE_SIDE_KM,
             satellite_background=SATELLITE_BACKGROUND,
             basemap_zoom=BASEMAP_ZOOM,
-        ).show()
-        return
+            obstacle_radius_m=HINDERNIS_RADIUS_M,
+        )
+        route_result = planner.show()
+        grid = planner.grid
+        loesungs_laufzeit_s = 0.0
 
-    # -------------------------------------------------------------------------
-    # Schritt 2: Graph erstellen – Navigationsnetz aufbauen
-    # -------------------------------------------------------------------------
+    else:
+        # -------------------------------------------------------------------------
+        # Schritt 2: Graph erstellen – Navigationsnetz aufbauen
+        # -------------------------------------------------------------------------
 
-    start = perf_counter()
+        start = perf_counter()
 
-    grid = create_grid_graph(zones=zones, **graph_kwargs)
+        grid = create_grid_graph(zones=zones, **graph_kwargs)
 
-    _print_done("Graph erstellen", perf_counter() - start)
+        _print_done("Graph erstellen", perf_counter() - start)
 
-    # -------------------------------------------------------------------------
-    # Schritt 3: Wegsuche – kürzesten Weg finden
-    # -------------------------------------------------------------------------
+        # -------------------------------------------------------------------------
+        # Schritt 3: Wegsuche – kürzesten Weg finden
+        # -------------------------------------------------------------------------
 
-    start = perf_counter()
+        start = perf_counter()
 
-    route_result = find_path_and_visualize(
-        grid,
-        zones=zones,
-        output_png=base_dir / OUTPUT_ROUTE_MAP_NAME,
-        algorithm=WEGSUCHE_ALGORITHMUS,
-        show_map=WEGSUCHE_KARTE_ANZEIGEN,
-        satellite_background=SATELLITE_BACKGROUND,
-        basemap_zoom=BASEMAP_ZOOM,
-        fixed_extent=True,
-        center_lat=PNG_CENTER_LAT,
-        center_lon=PNG_CENTER_LON,
-        square_side_km=PNG_SQUARE_SIDE_KM,
-    )
+        route_result = find_path_and_visualize(
+            grid,
+            zones=zones,
+            output_png=base_dir / OUTPUT_ROUTE_MAP_NAME,
+            algorithm=WEGSUCHE_ALGORITHMUS,
+            show_map=WEGSUCHE_KARTE_ANZEIGEN,
+            satellite_background=SATELLITE_BACKGROUND,
+            basemap_zoom=BASEMAP_ZOOM,
+            fixed_extent=True,
+            center_lat=PNG_CENTER_LAT,
+            center_lon=PNG_CENTER_LON,
+            square_side_km=PNG_SQUARE_SIDE_KM,
+        )
 
-    loesungs_laufzeit_s = perf_counter() - start
+        loesungs_laufzeit_s = perf_counter() - start
 
     # -------------------------------------------------------------------------
     # Abschlussinformationen
