@@ -41,6 +41,57 @@ def build_route_geometries(grid, node_path):
 
 
 # =============================================================================
+# Karten-Ebenen zeichnen
+# =============================================================================
+
+def draw_route_layers(ax, *, grid, zones, route_line, route_points, start_point, end_point):
+    """
+    Zeichnet Sperrzonen, Graph und Route auf eine bestehende Achse (ax).
+
+    Alle Geometrien werden nach Web Mercator projiziert. Die Achse muss den
+    gewünschten Ausschnitt (und optional den Basemap-Hintergrund) bereits
+    besitzen. Wird sowohl von der PNG-Ausgabe als auch vom interaktiven
+    Fenster (Hinderniss.py) genutzt, damit die Darstellung identisch bleibt.
+
+    Ebenen (von unten nach oben):
+        2. Sperrzonen – rot, transparent
+        3. Alle Graphkanten – cyan, dünn
+        4. Alle Graphknoten – gelb, klein
+        5. Route-Linie – magenta, breit
+        6. Route-Knoten – weiß mit schwarzem Rand
+        7. Start- und Endpunkt – grün / rot, groß
+    """
+    # Alle Layer in Web Mercator projizieren.
+    nodes        = grid.nodes_gdf.to_crs(WEB_MERCATOR)
+    edges        = grid.edges_gdf.to_crs(WEB_MERCATOR)
+    route_line   = route_line.to_crs(WEB_MERCATOR)
+    route_points = route_points.to_crs(WEB_MERCATOR)
+    start_point  = start_point.to_crs(WEB_MERCATOR)
+    end_point    = end_point.to_crs(WEB_MERCATOR)
+
+    # Ebene 2: Sperrzonen
+    if zones is not None:
+        zones = zones.to_crs(WEB_MERCATOR)
+        zones.plot(ax=ax, facecolor="red", edgecolor="red", linewidth=0.8, alpha=0.20, zorder=2)
+
+    # Ebene 3: Alle Graphkanten
+    edges.plot(ax=ax, color="cyan", linewidth=0.5, alpha=0.35, zorder=3)
+
+    # Ebene 4: Alle Graphknoten
+    nodes.plot(ax=ax, color="yellow", markersize=2, alpha=0.55, zorder=4)
+
+    # Ebene 5: Route-Linie
+    route_line.plot(ax=ax, color="magenta", linewidth=3.0, alpha=0.95, zorder=5)
+
+    # Ebene 6: Route-Knoten
+    route_points.plot(ax=ax, color="white", edgecolor="black", markersize=18, alpha=1.0, zorder=6)
+
+    # Ebene 7: Start- und Endpunkt hervorheben.
+    start_point.plot(ax=ax, color="lime", edgecolor="black", markersize=80, zorder=7)
+    end_point.plot(ax=ax, color="red", edgecolor="black", markersize=80, zorder=7)
+
+
+# =============================================================================
 # Visualisierung als PNG
 # =============================================================================
 
@@ -64,29 +115,12 @@ def visualize_route_png(
     """
     Erzeugt eine PNG-Karte mit dem gesamten Graphen und der gefundenen Route.
 
-    Ebenen (von unten nach oben):
-        1. Satellitenhintergrund (optional)
-        2. Sperrzonen – rot, transparent
-        3. Alle Graphkanten – cyan, dünn
-        4. Alle Graphknoten – gelb, klein
-        5. Route-Linie – magenta, breit
-        6. Route-Knoten – weiß mit schwarzem Rand
-        7. Start- und Endpunkt – grün / rot, groß
+    Ebene 1 ist der optionale Satellitenhintergrund; die Ebenen 2–7
+    (Zonen, Graph, Route) zeichnet draw_route_layers.
 
     Rückgabe:
         Path-Objekt der gespeicherten PNG-Datei.
     """
-    # Alle Layer in Web Mercator projizieren.
-    nodes        = grid.nodes_gdf.to_crs(WEB_MERCATOR)
-    edges        = grid.edges_gdf.to_crs(WEB_MERCATOR)
-    route_line   = route_line.to_crs(WEB_MERCATOR)
-    route_points = route_points.to_crs(WEB_MERCATOR)
-    start_point  = start_point.to_crs(WEB_MERCATOR)
-    end_point    = end_point.to_crs(WEB_MERCATOR)
-
-    if zones is not None:
-        zones = zones.to_crs(WEB_MERCATOR)
-
     # Kartenausschnitt bestimmen.
     if fixed_extent:
         minx, miny, maxx, maxy = get_fixed_extent_web_mercator(
@@ -95,7 +129,7 @@ def visualize_route_png(
             square_side_km=square_side_km,
         )
     else:
-        minx, miny, maxx, maxy = edges.total_bounds
+        minx, miny, maxx, maxy = grid.edges_gdf.to_crs(WEB_MERCATOR).total_bounds
 
     fig, ax = setup_map_figure(
         minx, miny, maxx, maxy,
@@ -103,24 +137,14 @@ def visualize_route_png(
         basemap_zoom=basemap_zoom,
     )
 
-    # Ebene 2: Sperrzonen
-    if zones is not None:
-        zones.plot(ax=ax, facecolor="red", edgecolor="red", linewidth=0.8, alpha=0.20, zorder=2)
-
-    # Ebene 3: Alle Graphkanten
-    edges.plot(ax=ax, color="cyan", linewidth=0.5, alpha=0.35, zorder=3)
-
-    # Ebene 4: Alle Graphknoten
-    nodes.plot(ax=ax, color="yellow", markersize=2, alpha=0.55, zorder=4)
-
-    # Ebene 5: Route-Linie
-    route_line.plot(ax=ax, color="magenta", linewidth=3.0, alpha=0.95, zorder=5)
-
-    # Ebene 6: Route-Knoten
-    route_points.plot(ax=ax, color="white", edgecolor="black", markersize=18, alpha=1.0, zorder=6)
-
-    # Ebene 7: Start- und Endpunkt hervorheben.
-    start_point.plot(ax=ax, color="lime", edgecolor="black", markersize=80, zorder=7)
-    end_point.plot(ax=ax, color="red", edgecolor="black", markersize=80, zorder=7)
+    draw_route_layers(
+        ax,
+        grid=grid,
+        zones=zones,
+        route_line=route_line,
+        route_points=route_points,
+        start_point=start_point,
+        end_point=end_point,
+    )
 
     return save_map_figure(fig, ax, output_png, title="Kürzester Weg im Graphen", show_map=show_map)

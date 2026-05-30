@@ -244,6 +244,48 @@ def _floyd_warshall(grid, neighbors, start_id, end_id):
 
 
 # =============================================================================
+# Wegsuche (ohne Visualisierung)
+# =============================================================================
+
+def compute_route(grid, *, algorithm="astar"):
+    """
+    Sucht den kürzesten Weg im Gitter und gibt die reine Knotenfolge zurück.
+
+    Trennt die Wegsuche von der Visualisierung, sodass andere Module (z. B.
+    Hinderniss.py) die Route nach einer Graph-Änderung neu berechnen können,
+    ohne eine Karte zu erzeugen.
+
+    algorithm:
+        "dijkstra", "astar" oder "floyd_warshall".
+
+    Rückgabe:
+        (node_path, route_length_m)
+    """
+    neighbors = _make_neighbor_function(grid)
+
+    if algorithm == "dijkstra":
+        return _dijkstra(neighbors, grid.start_id, grid.end_id)
+
+    if algorithm == "floyd_warshall":
+        return _floyd_warshall(grid, neighbors, grid.start_id, grid.end_id)
+
+    if algorithm == "astar":
+        end_x, end_y = grid.end_xy
+
+        def heuristic(node_id):
+            """Euklidische Distanz zum Ziel als Unterschätzung des Restweges."""
+            x, y = grid.node_xy(node_id)
+            return math.hypot(x - end_x, y - end_y)
+
+        return _astar(neighbors, heuristic, grid.start_id, grid.end_id)
+
+    raise ValueError(
+        f"Unbekannter Algorithmus '{algorithm}'. "
+        f"Erlaubt: 'dijkstra', 'astar', 'floyd_warshall'."
+    )
+
+
+# =============================================================================
 # Haupt-Pipeline-Funktion
 # =============================================================================
 
@@ -277,28 +319,9 @@ def find_path_and_visualize(
     Rückgabe:
         Dict mit Ergebniskennzahlen (Algorithmus, Länge, Knotenzahl, PNG-Pfad).
     """
-    neighbors = _make_neighbor_function(grid)
-
     # --- Wegsuche direkt auf der Matrix ---
 
-    if algorithm == "dijkstra":
-        node_path, route_length_m = _dijkstra(neighbors, grid.start_id, grid.end_id)
-    elif algorithm == "floyd_warshall":
-        node_path, route_length_m = _floyd_warshall(grid, neighbors, grid.start_id, grid.end_id)
-    elif algorithm == "astar":
-        end_x, end_y = grid.end_xy
-
-        def heuristic(node_id):
-            """Euklidische Distanz zum Ziel als Unterschätzung des Restweges."""
-            x, y = grid.node_xy(node_id)
-            return math.hypot(x - end_x, y - end_y)
-
-        node_path, route_length_m = _astar(neighbors, heuristic, grid.start_id, grid.end_id)
-    else:
-        raise ValueError(
-            f"Unbekannter Algorithmus '{algorithm}'. "
-            f"Erlaubt: 'dijkstra', 'astar', 'floyd_warshall'."
-        )
+    node_path, route_length_m = compute_route(grid, algorithm=algorithm)
 
     # --- Route als Geometrie und Karte erzeugen (einzige Ausgabedatei) ---
 

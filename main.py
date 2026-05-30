@@ -21,6 +21,7 @@ from math import cos, radians
 from Map_Preprocessing import create_luftvo_buffer_geojson
 from Graph import create_navigation_graph as create_grid_graph
 from Algorithmus import find_path_and_visualize
+from Hinderniss import InteractivePlanner
 
 
 # =============================================================================
@@ -78,6 +79,11 @@ WEGSUCHE_ALGORITHMUS = "astar"
 
 # True = Routenkarte nach Erzeugung anzeigen
 WEGSUCHE_KARTE_ANZEIGEN = True
+
+# True = interaktives Fenster öffnen: ein Linksklick fügt ein 100-m-Hindernis
+# hinzu, baut den Graphen neu auf und sucht eine neue Route (Hinderniss.py).
+# In diesem Modus wird keine PNG-Datei geschrieben.
+INTERAKTIVE_HINDERNISSE = True
 
 
 # =============================================================================
@@ -165,25 +171,44 @@ def main():
 
     _print_done("GeoJSON bearbeiten", perf_counter() - start)
 
-    # -------------------------------------------------------------------------
-    # Schritt 2: Graph erstellen – Navigationsnetz aufbauen
-    # -------------------------------------------------------------------------
-
-    start = perf_counter()
-
-    grid = create_grid_graph(
-        zones=zones,
-
+    # Gemeinsame Graph-Parameter (für Pipeline und interaktiven Modus).
+    graph_kwargs = dict(
         spacing_m=NETZ_AUFLOESUNG_M,
         bbox_padding_m=GRAPH_BBOX_PADDING_M,
         max_bbox_wgs84=graph_bbox_wgs84,
-
         start_lat=START_LAT,
         start_lon=START_LON,
         end_lat=END_LAT,
         end_lon=END_LON,
         special_connections_per_point=START_END_VERBINDUNGEN_PRO_PUNKT,
     )
+
+    # -------------------------------------------------------------------------
+    # Interaktiver Modus: Hindernisse per Mausklick (kein PNG)
+    # -------------------------------------------------------------------------
+
+    if INTERAKTIVE_HINDERNISSE:
+        print("Interaktiver Modus: Linksklick ins Fenster setzt ein 100-m-Hindernis.")
+        print()
+        InteractivePlanner(
+            zones=zones,
+            graph_kwargs=graph_kwargs,
+            algorithm=WEGSUCHE_ALGORITHMUS,
+            center_lat=PNG_CENTER_LAT,
+            center_lon=PNG_CENTER_LON,
+            square_side_km=PNG_SQUARE_SIDE_KM,
+            satellite_background=SATELLITE_BACKGROUND,
+            basemap_zoom=BASEMAP_ZOOM,
+        ).show()
+        return
+
+    # -------------------------------------------------------------------------
+    # Schritt 2: Graph erstellen – Navigationsnetz aufbauen
+    # -------------------------------------------------------------------------
+
+    start = perf_counter()
+
+    grid = create_grid_graph(zones=zones, **graph_kwargs)
 
     _print_done("Graph erstellen", perf_counter() - start)
 
