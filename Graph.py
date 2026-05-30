@@ -29,11 +29,12 @@ from shapely.geometry import LineString
 from utils import WGS84, DEFAULT_METRIC_CRS, get_geometry_union, wgs84_to_metric, prepare_geometry
 
 
-# Richtungs-Offsets (dr, dc): dr entlang der Zeilen (Norden positiv),
-# dc entlang der Spalten (Osten positiv).
-_ORTHO = {"E": (0, 1), "W": (0, -1), "N": (1, 0), "S": (-1, 0)}
+# Die vier orthogonalen Richtungen (Osten, Westen, Norden, Süden).
+_ORTHO = ("E", "W", "N", "S")
 
 # Zu jeder getesteten Vorwärtsrichtung die entgegengesetzte Richtung.
+# Es werden nur die Vorwärtsrichtungen geometrisch getestet (E, N); die
+# Gegenrichtung (W, S) wird daraus abgeleitet (siehe _set_reverse).
 _REVERSE = {"E": "W", "N": "S"}
 
 
@@ -243,7 +244,7 @@ def _compute_edges(node_valid, minx, miny, spacing_m, metric_crs, zones_metric):
 
 
 def _connect_special(point, node_valid, minx, miny, spacing_m, n_cols,
-                     forbidden, max_connections, label):
+                     forbidden, max_connections):
     """
     Verbindet einen Start- oder Endpunkt mit den nächsten sichtbaren Gitterknoten.
 
@@ -390,11 +391,11 @@ def create_navigation_graph(
 
     start_connections, start_lines = _connect_special(
         start_pt, node_valid, minx, miny, spacing_m, n_cols,
-        forbidden, special_connections_per_point, "Start",
+        forbidden, special_connections_per_point,
     )
     end_connections, end_lines = _connect_special(
         end_pt, node_valid, minx, miny, spacing_m, n_cols,
-        forbidden, special_connections_per_point, "Ende",
+        forbidden, special_connections_per_point,
     )
 
     total_len += sum(length for _, length in start_connections)

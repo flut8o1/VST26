@@ -285,7 +285,7 @@ def find_path_and_visualize(
         node_path, route_length_m = _dijkstra(neighbors, grid.start_id, grid.end_id)
     elif algorithm == "floyd_warshall":
         node_path, route_length_m = _floyd_warshall(grid, neighbors, grid.start_id, grid.end_id)
-    else:
+    elif algorithm == "astar":
         end_x, end_y = grid.end_xy
 
         def heuristic(node_id):
@@ -294,6 +294,11 @@ def find_path_and_visualize(
             return math.hypot(x - end_x, y - end_y)
 
         node_path, route_length_m = _astar(neighbors, heuristic, grid.start_id, grid.end_id)
+    else:
+        raise ValueError(
+            f"Unbekannter Algorithmus '{algorithm}'. "
+            f"Erlaubt: 'dijkstra', 'astar', 'floyd_warshall'."
+        )
 
     # --- Route als Geometrie und Karte erzeugen (einzige Ausgabedatei) ---
 

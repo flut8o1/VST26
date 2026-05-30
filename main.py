@@ -73,7 +73,7 @@ START_END_VERBINDUNGEN_PRO_PUNKT = 5
 # Wegsuche
 # =============================================================================
 
-# "dijkstra" oder "astar"
+# "dijkstra", "astar" oder "floyd_warshall"
 WEGSUCHE_ALGORITHMUS = "astar"
 
 # True = Routenkarte nach Erzeugung anzeigen
@@ -215,7 +215,11 @@ def main():
 
     gesamte_laufzeit_s = perf_counter() - gesamte_laufzeit_start
 
-    algorithmus_text       = "AStar" if route_result["algorithm"] == "astar" else "Dijkstra"
+    algorithmus_text       = {
+        "astar":          "AStar",
+        "dijkstra":       "Dijkstra",
+        "floyd_warshall": "Floyd-Warshall",
+    }.get(route_result["algorithm"], route_result["algorithm"])
     laenge_text            = (
         f"{route_result['route_length_m']:.2f} m / "
         f"{route_result['route_length_km']:.3f} km"

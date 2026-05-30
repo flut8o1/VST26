@@ -9,13 +9,12 @@ Ausgabe: GeoDataFrame mit Polygon-Geometrien (WGS84), das direkt im
 Speicher an die Graph-Erstellung weitergereicht wird – keine Zwischendatei.
 """
 
-from pathlib import Path
 from math import cos, sin, pi
 
 import geopandas as gpd
 from shapely.geometry import Polygon, MultiPolygon
 
-from utils import WGS84, DEFAULT_METRIC_CRS
+from utils import WGS84, DEFAULT_METRIC_CRS, read_geojson
 
 
 # =============================================================================
@@ -258,19 +257,10 @@ def create_luftvo_buffer_geojson(
         "landscape_protection":   landscape_protection_radius_m,
     }
 
-    input_path = Path(input_geojson)
-
-    if not input_path.exists():
-        raise FileNotFoundError(f"Eingabedatei nicht gefunden: {input_path}")
-
     # --- Schritt 1: Eingabe einlesen und CRS normalisieren ---
+    # read_geojson prüft Existenz und Leerheit und liefert WGS84.
 
-    gdf = gpd.read_file(input_path)
-
-    if gdf.empty:
-        raise ValueError("Die Eingabe-GeoJSON enthält keine Features.")
-
-    gdf = gdf.set_crs(WGS84) if gdf.crs is None else gdf.to_crs(WGS84)
+    gdf = read_geojson(input_geojson)
 
     # --- Schritt 2: Features klassifizieren und relevante herausfiltern ---
 
@@ -291,11 +281,9 @@ def create_luftvo_buffer_geojson(
 
         rows.append({
             **props,
-            "luftvo_type":            luftvo_type,
-            "luftvo_radius_m":        radius_by_type[luftvo_type],
-            "polygon_corners":        polygon_corners,
-            "zone_buffer_resolution": zone_buffer_resolution,
-            "geometry":               geom,
+            "luftvo_type":     luftvo_type,
+            "luftvo_radius_m": radius_by_type[luftvo_type],
+            "geometry":        geom,
         })
 
     if not rows:
