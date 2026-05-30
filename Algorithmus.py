@@ -1,28 +1,31 @@
 """
-Algoritmen.py – Kürzeste-Weg-Suche auf dem Matrix-Gitter.
+Algorithmus.py – Kürzeste-Weg-Suche auf dem Matrix-Gitter.
 
 Erhält das NavigationGrid (Matrix-Darstellung) im Speicher und sucht den
-kürzesten Weg zwischen Start- und Endknoten mit Dijkstra oder A*.
+kürzesten Weg zwischen Start- und Endknoten mit Dijkstra, A* oder
+Floyd-Warshall.
 
 Die Algorithmen arbeiten direkt auf den (row, col)-Indizes der Matrix:
 Die Nachbarn eines Knotens werden über die Passierbarkeits-Arrays bestimmt –
 es wird keine Adjazenzliste aufgebaut. Start- und Endknoten liegen außerhalb
 des Gitters und sind über ihre vorab gespeicherten Verbindungen angebunden.
 
-Einzige Ausgabedatei ist die PNG-Routenkarte.
+Die Darstellung der Route ist in Visualisierung.py ausgelagert; dieses Modul
+liefert nur die Knotenfolge und ruft die Visualisierung zum Schluss auf.
 """
 
 import math
 from heapq import heappush, heappop
 
-import geopandas as gpd
-from shapely.geometry import Point, LineString
+import numpy as np
 
-from utils import (
-    WGS84, WEB_MERCATOR,
-    get_fixed_extent_web_mercator,
-    setup_map_figure, save_map_figure,
-)
+from Visualisierung import build_route_geometries, visualize_route_png
+
+
+# Floyd-Warshall benötigt eine volle (V x V)-Distanzmatrix. Oberhalb dieser
+# Knotenzahl ist der Speicher- und Rechenaufwand (O(V^2) Speicher, O(V^3) Zeit)
+# nicht mehr praktikabel; die Suche bricht dann mit einer klaren Meldung ab.
+FLOYD_WARSHALL_MAX_NODES = 4000
 
 
 # =============================================================================
@@ -34,8 +37,8 @@ def _make_neighbor_function(grid):
     Erstellt eine Funktion, die zu einem Knoten seine Nachbarn liefert.
 
     Für Gitterknoten werden die Nachbarn über die Passierbarkeits-Arrays der
-    Matrix bestimmt (4 orthogonale, optional 4 diagonale Richtungen). Start-
-    und Endknoten nutzen ihre gespeicherten Verbindungen.
+    Matrix bestimmt (4 orthogonale Richtungen). Start- und Endknoten nutzen
+    ihre gespeicherten Verbindungen.
 
     Rückgabe einer Nachbarfunktion node_id -> Liste von (nachbar_id, kosten_m).
     """
@@ -169,111 +172,75 @@ def _astar(neighbors, heuristic, start_id, end_id):
     return _reconstruct_path(previous, start_id, end_id), g_score[end_id]
 
 
-# =============================================================================
-# Route als Geometrie
-# =============================================================================
-
-def _build_route_geometries(grid, node_path):
+def _floyd_warshall(grid, neighbors, start_id, end_id):
     """
-    Wandelt die Knotenfolge der Route in Zeichengeometrien (WGS84) um.
+    Floyd-Warshall-Algorithmus (alle kürzesten Wege zwischen allen Knoten).
+
+    Anders als Dijkstra/A* berechnet Floyd-Warshall die kürzesten Distanzen
+    zwischen ALLEN Knotenpaaren. Das ist hier eigentlich mehr als nötig, dient
+    aber als vollständige, vergleichbare Variante. Aus dem Ergebnis wird der
+    Weg von Start zu Ende extrahiert.
+
+    Aufwand: O(V^2) Speicher und O(V^3) Zeit. Für feine Gitter daher nur bis
+    FLOYD_WARSHALL_MAX_NODES Knoten praktikabel.
 
     Rückgabe:
-        (route_line, route_points, start_point, end_point) – jeweils GeoSeries.
+        (node_path, route_length_m)
     """
-    coords = [grid.node_xy(node_id) for node_id in node_path]
+    # --- Alle erreichbaren Knoten aufzählen (Gitterknoten + Start + Ende) ---
+    valid_rows, valid_cols = np.nonzero(grid.node_valid)
+    node_ids = [int(r) * grid.n_cols + int(c) for r, c in zip(valid_rows, valid_cols)]
+    node_ids.append(start_id)
+    node_ids.append(end_id)
 
-    route_line   = gpd.GeoSeries([LineString(coords)], crs=grid.metric_crs).to_crs(WGS84)
-    route_points = gpd.GeoSeries([Point(xy) for xy in coords], crs=grid.metric_crs).to_crs(WGS84)
-    start_point  = gpd.GeoSeries([Point(grid.start_xy)], crs=grid.metric_crs).to_crs(WGS84)
-    end_point    = gpd.GeoSeries([Point(grid.end_xy)], crs=grid.metric_crs).to_crs(WGS84)
+    n = len(node_ids)
 
-    return route_line, route_points, start_point, end_point
-
-
-# =============================================================================
-# Visualisierung als PNG
-# =============================================================================
-
-def _visualize_route_png(
-    *,
-    grid,
-    zones,
-    route_line,
-    route_points,
-    start_point,
-    end_point,
-    output_png,
-    show_map=True,
-    satellite_background=True,
-    basemap_zoom=13,
-    fixed_extent=True,
-    center_lat=48.137154,
-    center_lon=11.576124,
-    square_side_km=25,
-):
-    """
-    Erzeugt eine PNG-Karte mit dem gesamten Graphen und der gefundenen Route.
-
-    Ebenen (von unten nach oben):
-        1. Satellitenhintergrund (optional)
-        2. Sperrzonen – rot, transparent
-        3. Alle Graphkanten – cyan, dünn
-        4. Alle Graphknoten – gelb, klein
-        5. Route-Linie – magenta, breit
-        6. Route-Knoten – weiß mit schwarzem Rand
-        7. Start- und Endpunkt – grün / rot, groß
-
-    Rückgabe:
-        Path-Objekt der gespeicherten PNG-Datei.
-    """
-    # Alle Layer in Web Mercator projizieren.
-    nodes        = grid.nodes_gdf.to_crs(WEB_MERCATOR)
-    edges        = grid.edges_gdf.to_crs(WEB_MERCATOR)
-    route_line   = route_line.to_crs(WEB_MERCATOR)
-    route_points = route_points.to_crs(WEB_MERCATOR)
-    start_point  = start_point.to_crs(WEB_MERCATOR)
-    end_point    = end_point.to_crs(WEB_MERCATOR)
-
-    if zones is not None:
-        zones = zones.to_crs(WEB_MERCATOR)
-
-    # Kartenausschnitt bestimmen.
-    if fixed_extent:
-        minx, miny, maxx, maxy = get_fixed_extent_web_mercator(
-            center_lat=center_lat,
-            center_lon=center_lon,
-            square_side_km=square_side_km,
+    if n > FLOYD_WARSHALL_MAX_NODES:
+        raise ValueError(
+            f"Floyd-Warshall ist für {n} Knoten nicht praktikabel "
+            f"(Grenze: {FLOYD_WARSHALL_MAX_NODES}). Der Aufwand wächst mit "
+            f"O(V^2) Speicher und O(V^3) Zeit. Bitte eine gröbere Auflösung "
+            f"(NETZ_AUFLOESUNG_M) oder einen kleineren Ausschnitt wählen, oder "
+            f"Dijkstra/A* verwenden."
         )
-    else:
-        minx, miny, maxx, maxy = edges.total_bounds
 
-    fig, ax = setup_map_figure(
-        minx, miny, maxx, maxy,
-        satellite_background=satellite_background,
-        basemap_zoom=basemap_zoom,
-    )
+    index_of = {node_id: i for i, node_id in enumerate(node_ids)}
 
-    # Ebene 2: Sperrzonen
-    if zones is not None:
-        zones.plot(ax=ax, facecolor="red", edgecolor="red", linewidth=0.8, alpha=0.20, zorder=2)
+    # --- Distanz- und Nachfolger-Matrix initialisieren ---
+    dist = np.full((n, n), np.inf, dtype=np.float64)
+    nxt  = np.full((n, n), -1, dtype=np.int64)
 
-    # Ebene 3: Alle Graphkanten
-    edges.plot(ax=ax, color="cyan", linewidth=0.5, alpha=0.35, zorder=3)
+    np.fill_diagonal(dist, 0.0)
+    for i in range(n):
+        nxt[i, i] = i
 
-    # Ebene 4: Alle Graphknoten
-    nodes.plot(ax=ax, color="yellow", markersize=2, alpha=0.55, zorder=4)
+    # Direkte Kanten aus der Nachbarschaft eintragen.
+    for i, node_id in enumerate(node_ids):
+        for neighbor, cost in neighbors(node_id):
+            j = index_of[neighbor]
+            if cost < dist[i, j]:
+                dist[i, j] = cost
+                nxt[i, j]  = j
 
-    # Ebene 5: Route-Linie
-    route_line.plot(ax=ax, color="magenta", linewidth=3.0, alpha=0.95, zorder=5)
+    # --- Kern: für jeden Zwischenknoten k alle Paare (i, j) verbessern ---
+    # Vektorisiert über numpy: pro k ein O(V^2)-Schritt statt zweier Schleifen.
+    for k in range(n):
+        through_k = dist[:, k, None] + dist[None, k, :]
+        improved  = through_k < dist
+        dist      = np.where(improved, through_k, dist)
+        nxt       = np.where(improved, nxt[:, k, None], nxt)
 
-    # Ebene 6: Route-Knoten
-    route_points.plot(ax=ax, color="white", edgecolor="black", markersize=18, alpha=1.0, zorder=6)
+    s = index_of[start_id]
+    e = index_of[end_id]
 
-    # Ebene 7: Start- und Endpunkt hervorheben.
-    start_point.plot(ax=ax, color="lime", edgecolor="black", markersize=80, zorder=7)
-    end_point.plot(ax=ax, color="red", edgecolor="black", markersize=80, zorder=7)
+    # --- Weg aus der Nachfolger-Matrix rekonstruieren ---
+    path    = [start_id]
+    current = s
+    while current != e:
+        current = int(nxt[current, e])
+        path.append(node_ids[current])
 
-    return save_map_figure(fig, ax, output_png, title="Kürzester Weg im Graphen", show_map=show_map)
+    return path, float(dist[s, e])
 
 
 # =============================================================================
@@ -303,8 +270,9 @@ def find_path_and_visualize(
         Optionales GeoDataFrame der Sperrzonen für die Kartendarstellung.
 
     algorithm:
-        "dijkstra" – Dijkstra-Algorithmus (optimal, keine Heuristik).
-        "astar"    – A*-Algorithmus (schneller durch euklidische Heuristik).
+        "dijkstra"        – Dijkstra-Algorithmus (optimal, keine Heuristik).
+        "astar"           – A*-Algorithmus (schneller durch euklidische Heuristik).
+        "floyd_warshall"  – Floyd-Warshall (alle Paare; nur für kleine Gitter).
 
     Rückgabe:
         Dict mit Ergebniskennzahlen (Algorithmus, Länge, Knotenzahl, PNG-Pfad).
@@ -315,6 +283,8 @@ def find_path_and_visualize(
 
     if algorithm == "dijkstra":
         node_path, route_length_m = _dijkstra(neighbors, grid.start_id, grid.end_id)
+    elif algorithm == "floyd_warshall":
+        node_path, route_length_m = _floyd_warshall(grid, neighbors, grid.start_id, grid.end_id)
     else:
         end_x, end_y = grid.end_xy
 
@@ -327,9 +297,9 @@ def find_path_and_visualize(
 
     # --- Route als Geometrie und Karte erzeugen (einzige Ausgabedatei) ---
 
-    route_line, route_points, start_point, end_point = _build_route_geometries(grid, node_path)
+    route_line, route_points, start_point, end_point = build_route_geometries(grid, node_path)
 
-    map_file = _visualize_route_png(
+    map_file = visualize_route_png(
         grid=grid,
         zones=zones,
         route_line=route_line,

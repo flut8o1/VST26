@@ -20,7 +20,7 @@ from math import cos, radians
 
 from Map_Preprocessing import create_luftvo_buffer_geojson
 from Graph import create_navigation_graph as create_grid_graph
-from Algoritmen import find_path_and_visualize
+from Algorithmus import find_path_and_visualize
 
 
 # =============================================================================
