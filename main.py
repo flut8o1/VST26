@@ -36,10 +36,7 @@ OUTPUT_ROUTE_MAP_NAME = "route_karte.png"
 # Puffer-Einstellungen (Map_Preprocessing.py)
 # =============================================================================
 
-# Anzahl der Ecken für Punkt-Polygone (höher = runder)
-POLYGON_ECKEN_N = 8
-
-# Rundheit der Puffer um bestehende Flächen/Linien (höher = runder)
+# Segmente pro Viertelkreis bei buffer() – höher = runder (4 × Wert = Gesamtecken)
 ZONE_BUFFER_RESOLUTION = 8
 
 
@@ -168,7 +165,6 @@ def main():
         nature_protection_radius_m=0,
         landscape_protection_radius_m=0,
 
-        polygon_corners=POLYGON_ECKEN_N,
         zone_buffer_resolution=ZONE_BUFFER_RESOLUTION,
     )
 

@@ -9,10 +9,7 @@ Ausgabe: GeoDataFrame mit Polygon-Geometrien (WGS84), das direkt im
 Speicher an die Graph-Erstellung weitergereicht wird – keine Zwischendatei.
 """
 
-from math import cos, sin, pi
-
 import geopandas as gpd
-from shapely.geometry import Polygon, MultiPolygon
 
 from utils import WGS84, DEFAULT_METRIC_CRS, read_geojson
 
@@ -143,47 +140,6 @@ def classify_luftvo_type(props):
 # Geometrie-Erzeugung
 # =============================================================================
 
-def _create_regular_polygon(point, radius_m, corners):
-    """
-    Erstellt ein regelmäßiges n-Eck um einen metrischen Punkt.
-
-    point:
-        Shapely Point im metrischen CRS.
-    radius_m:
-        Umkreisradius in Metern.
-    corners:
-        Anzahl der Ecken.
-    """
-    x, y = point.x, point.y
-
-    # Gleichmäßig verteilte Punkte auf einem Kreis mit dem Umkreisradius.
-    coords = [
-        (x + radius_m * cos(2 * pi * i / corners),
-         y + radius_m * sin(2 * pi * i / corners))
-        for i in range(corners)
-    ]
-
-    # Polygon schließen (letzter Punkt = erster Punkt).
-    coords.append(coords[0])
-    return Polygon(coords)
-
-
-def _create_point_polygon_geometry(geom, radius_m, corners):
-    """
-    Erzeugt Polygon oder MultiPolygon aus einem Point- oder MultiPoint-Feature.
-    """
-    if geom.geom_type == "Point":
-        return _create_regular_polygon(geom, radius_m, corners)
-
-    if geom.geom_type == "MultiPoint":
-        return MultiPolygon([
-            _create_regular_polygon(pt, radius_m, corners)
-            for pt in geom.geoms
-        ])
-
-    raise ValueError(f"Nicht unterstützte Punkt-Geometrie: {geom.geom_type}")
-
-
 def _create_buffered_zone_geometry(geom, radius_m, buffer_resolution):
     """
     Vergrößert eine bestehende Geometrie (Polygon, Linie) um radius_m Meter.
@@ -218,8 +174,7 @@ def create_luftvo_buffer_geojson(
     # Schutzgebiete werden nicht zusätzlich gepuffert (Fläche selbst = Zone)
     nature_protection_radius_m=0,
     landscape_protection_radius_m=0,
-    # Qualität der erzeugten Polygone
-    polygon_corners=64,
+    # Qualität der erzeugten Polygone (Segmente pro Viertelkreis bei buffer())
     zone_buffer_resolution=16,
     metric_crs=DEFAULT_METRIC_CRS,
 ):
@@ -227,14 +182,9 @@ def create_luftvo_buffer_geojson(
     Liest OSM-GeoJSON ein und erzeugt eine gepufferte LuftVO-Zonenebene.
 
     Für jedes Feature wird der LuftVO-Typ bestimmt und eine Sicherheitszone
-    in der entsprechenden Größe erzeugt:
-
-    - Point / MultiPoint:
-        Regelmäßiges n-Eck mit polygon_corners Ecken und dem Typradius.
-    - Polygon / MultiPolygon / Linie:
-        Bestehende Geometrie wird um den Typradius nach außen gepuffert.
-    - Radius 0:
-        Geometrie wird unverändert übernommen (z. B. für Schutzgebiete).
+    in der entsprechenden Größe erzeugt. Alle Geometrietypen (Point, Linie,
+    Polygon) werden einheitlich mit buffer() gepuffert. Bei Radius 0 wird
+    die Geometrie unverändert übernommen (z. B. für Schutzgebiete).
 
     Rückgabe:
         GeoDataFrame mit den erzeugten Zonenflächen in WGS84.
@@ -301,14 +251,7 @@ def create_luftvo_buffer_geojson(
     new_geometries = []
 
     for geom, radius_m in zip(out_metric.geometry, out_metric["luftvo_radius_m"]):
-        if geom.geom_type in {"Point", "MultiPoint"}:
-            # Punktobjekte werden zu regelmäßigen Polygonen.
-            new_geom = _create_point_polygon_geometry(geom, radius_m, polygon_corners)
-        else:
-            # Flächen und Linien werden nach außen gepuffert.
-            new_geom = _create_buffered_zone_geometry(geom, radius_m, zone_buffer_resolution)
-
-        new_geometries.append(new_geom)
+        new_geometries.append(_create_buffered_zone_geometry(geom, radius_m, zone_buffer_resolution))
 
     out_metric["geometry"] = new_geometries
 
