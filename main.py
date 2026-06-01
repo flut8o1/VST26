@@ -83,7 +83,7 @@ WEGSUCHE_KARTE_ANZEIGEN = True
 INTERAKTIVE_HINDERNISSE = True
 
 # Radius eines per Mausklick gesetzten Hindernisses (in Metern)
-HINDERNIS_RADIUS_M = 100
+HINDERNIS_RADIUS_M = 1000
 
 
 # =============================================================================
