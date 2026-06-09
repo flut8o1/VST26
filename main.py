@@ -202,7 +202,7 @@ def main():
         )
         route_result = planner.show()
         grid = planner.grid
-        loesungs_laufzeit_s = 0.0
+        loesungs_laufzeit_s = route_result["laufzeit_s"]
 
     else:
         # -------------------------------------------------------------------------
@@ -266,6 +266,7 @@ def main():
     print("LÖSUNG:")
     print(f"  Algorithmus:                  {algorithmus_text}")
     print(f"  Länge:                        {laenge_text}")
+    print(f"  Knoten durchlaufen:           {route_result['route_node_count']}")
     print(f"  Laufzeit Wegsuche:            {loesungs_laufzeit_text}")
     print()
     print(f"Gesamte Laufzeit:             {gesamte_laufzeit_s:.3f} s")

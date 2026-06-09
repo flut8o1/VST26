@@ -13,6 +13,8 @@ Start, Ende und alle Graph-Parameter werden vom Aufrufer übergeben
 (siehe main.py).
 """
 
+from time import perf_counter
+
 import contextily as cx
 import geopandas as gpd
 import matplotlib.pyplot as plt
@@ -88,7 +90,7 @@ class InteractivePlanner:
 
         self.grid        = grid
         self.route_geoms = build_route_geometries(grid, node_path)
-        return length_m
+        return length_m, len(node_path)
 
     # -------------------------------------------------------------------------
     # Hindernis-Geometrie aus einem Mausklick
@@ -185,7 +187,7 @@ class InteractivePlanner:
         plt.pause(0.01)
 
         try:
-            length_m = self._rebuild()
+            length_m, _ = self._rebuild()
         except Exception as exc:
             # Hindernis blockiert Start/Ende oder macht das Ziel unerreichbar:
             # vorigen Zustand wiederherstellen und Hindernis verwerfen.
@@ -201,11 +203,15 @@ class InteractivePlanner:
 
     def show(self):
         """Erste Route berechnen, Karte zeichnen und das Fenster öffnen."""
-        length_m = self._rebuild()
+        t0 = perf_counter()
+        length_m, node_count = self._rebuild()
+        laufzeit_s = perf_counter() - t0
         self._render(status=f"Route: {length_m:.0f} m / {length_m / 1000:.3f} km")
         plt.show()
         return {
-            "algorithm":       self.algorithm,
-            "route_length_m":  length_m,
-            "route_length_km": length_m / 1000,
+            "algorithm":        self.algorithm,
+            "route_length_m":   length_m,
+            "route_length_km":  length_m / 1000,
+            "route_node_count": node_count,
+            "laufzeit_s":       laufzeit_s,
         }
