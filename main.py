@@ -219,8 +219,6 @@ def main():
         # Schritt 3: Wegsuche – kürzesten Weg finden
         # -------------------------------------------------------------------------
 
-        start = perf_counter()
-
         route_result = find_path_and_visualize(
             grid,
             zones=zones,
@@ -235,7 +233,7 @@ def main():
             square_side_km=PNG_SQUARE_SIDE_KM,
         )
 
-        loesungs_laufzeit_s = perf_counter() - start
+        loesungs_laufzeit_s = route_result["wegsuche_laufzeit_s"]
 
     # -------------------------------------------------------------------------
     # Abschlussinformationen

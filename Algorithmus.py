@@ -16,6 +16,7 @@ liefert nur die Knotenfolge und ruft die Visualisierung zum Schluss auf.
 
 import math
 from heapq import heappush, heappop
+from time import perf_counter
 
 import numpy as np
 
@@ -323,7 +324,9 @@ def find_path_and_visualize(
     """
     # --- Wegsuche direkt auf der Matrix ---
 
+    start = perf_counter()
     node_path, route_length_m, nodes_checked = compute_route(grid, algorithm=algorithm)
+    wegsuche_laufzeit_s = perf_counter() - start
 
     # --- Route als Geometrie und Karte erzeugen (einzige Ausgabedatei) ---
 
@@ -359,5 +362,6 @@ def find_path_and_visualize(
         "route_node_count":      len(node_path),
         "route_edge_count":      len(node_path) - 1,
         "nodes_checked":         nodes_checked,
+        "wegsuche_laufzeit_s":   wegsuche_laufzeit_s,
         "route_map_png":         map_file,
     }
