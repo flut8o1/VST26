@@ -85,7 +85,10 @@ class InteractivePlanner:
 
     def _rebuild(self):
         """Graph aus self.zones neu bauen und Route neu suchen."""
+        print("  Graph wird aufgebaut …", flush=True)
         grid = create_navigation_graph(zones=self.zones, **self.graph_kwargs)
+
+        print("  Route wird gesucht …", flush=True)
         node_path, length_m = compute_route(grid, algorithm=self.algorithm)
 
         self.grid        = grid
@@ -131,8 +134,10 @@ class InteractivePlanner:
         ax.set_ylim(miny, maxy)
 
         if self.satellite:
+            print("  Satellitenhintergrund wird geladen …", flush=True)
             cx.add_basemap(ax, source=xyz.Esri.WorldImagery, zoom=self.basemap_zoom)
 
+        print("  Karte wird gezeichnet …", flush=True)
         route_line, route_points, start_point, end_point = self.route_geoms
         draw_route_layers(
             ax,
@@ -203,11 +208,14 @@ class InteractivePlanner:
 
     def show(self):
         """Erste Route berechnen, Karte zeichnen und das Fenster öffnen."""
+        print("Initiale Route wird berechnet …", flush=True)
         t0 = perf_counter()
         length_m, node_count = self._rebuild()
         laufzeit_s = perf_counter() - t0
         self._render(status=f"Route: {length_m:.0f} m / {length_m / 1000:.3f} km")
+        print("Fenster wird geöffnet …", flush=True)
         plt.show()
+        print("Fenster geschlossen.", flush=True)
         return {
             "algorithm":        self.algorithm,
             "route_length_m":   length_m,
