@@ -106,7 +106,7 @@ def _dijkstra(neighbors, start_id, end_id):
     Verwendet einen Min-Heap für effiziente Extraktion des nächstgelegenen Knotens.
 
     Rückgabe:
-        (node_path, route_length_m)
+        (node_path, route_length_m, nodes_checked)
     """
     distances = {start_id: 0.0}
     previous  = {}
@@ -132,7 +132,7 @@ def _dijkstra(neighbors, start_id, end_id):
                 previous[neighbor]  = current_node
                 heappush(queue, (new_distance, neighbor))
 
-    return _reconstruct_path(previous, start_id, end_id), distances[end_id]
+    return _reconstruct_path(previous, start_id, end_id), distances[end_id], len(visited)
 
 
 def _astar(neighbors, heuristic, start_id, end_id):
@@ -143,7 +143,7 @@ def _astar(neighbors, heuristic, start_id, end_id):
     die den tatsächlichen Restweg nie überschätzt.
 
     Rückgabe:
-        (node_path, route_length_m)
+        (node_path, route_length_m, nodes_checked)
     """
     g_score  = {start_id: 0.0}
     previous = {}
@@ -169,7 +169,7 @@ def _astar(neighbors, heuristic, start_id, end_id):
                 previous[neighbor] = current_node
                 heappush(queue, (tentative_g + heuristic(neighbor), tentative_g, neighbor))
 
-    return _reconstruct_path(previous, start_id, end_id), g_score[end_id]
+    return _reconstruct_path(previous, start_id, end_id), g_score[end_id], len(visited)
 
 
 def _floyd_warshall(grid, neighbors, start_id, end_id):
@@ -185,7 +185,7 @@ def _floyd_warshall(grid, neighbors, start_id, end_id):
     FLOYD_WARSHALL_MAX_NODES Knoten praktikabel.
 
     Rückgabe:
-        (node_path, route_length_m)
+        (node_path, route_length_m, nodes_checked)
     """
     # --- Alle erreichbaren Knoten aufzählen (Gitterknoten + Start + Ende) ---
     valid_rows, valid_cols = np.nonzero(grid.node_valid)
@@ -240,7 +240,7 @@ def _floyd_warshall(grid, neighbors, start_id, end_id):
         current = int(nxt[current, e])
         path.append(node_ids[current])
 
-    return path, float(dist[s, e])
+    return path, float(dist[s, e]), n
 
 
 # =============================================================================
@@ -259,7 +259,9 @@ def compute_route(grid, *, algorithm="astar"):
         "dijkstra", "astar" oder "floyd_warshall".
 
     Rückgabe:
-        (node_path, route_length_m)
+        (node_path, route_length_m, nodes_checked) – nodes_checked ist die
+        Anzahl der vom Algorithmus geprüften (besuchten) Knoten, bei
+        Floyd-Warshall also alle erzeugten Knoten.
     """
     neighbors = _make_neighbor_function(grid)
 
@@ -321,7 +323,7 @@ def find_path_and_visualize(
     """
     # --- Wegsuche direkt auf der Matrix ---
 
-    node_path, route_length_m = compute_route(grid, algorithm=algorithm)
+    node_path, route_length_m, nodes_checked = compute_route(grid, algorithm=algorithm)
 
     # --- Route als Geometrie und Karte erzeugen (einzige Ausgabedatei) ---
 
@@ -356,5 +358,6 @@ def find_path_and_visualize(
         "total_graph_length_km": total_graph_length_m / 1000,
         "route_node_count":      len(node_path),
         "route_edge_count":      len(node_path) - 1,
+        "nodes_checked":         nodes_checked,
         "route_map_png":         map_file,
     }

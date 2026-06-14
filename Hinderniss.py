@@ -89,11 +89,11 @@ class InteractivePlanner:
         grid = create_navigation_graph(zones=self.zones, **self.graph_kwargs)
 
         print("  Route wird gesucht …", flush=True)
-        node_path, length_m = compute_route(grid, algorithm=self.algorithm)
+        node_path, length_m, nodes_checked = compute_route(grid, algorithm=self.algorithm)
 
         self.grid        = grid
         self.route_geoms = build_route_geometries(grid, node_path)
-        return length_m, len(node_path)
+        return length_m, len(node_path), nodes_checked
 
     # -------------------------------------------------------------------------
     # Hindernis-Geometrie aus einem Mausklick
@@ -192,7 +192,7 @@ class InteractivePlanner:
         plt.pause(0.01)
 
         try:
-            length_m, _ = self._rebuild()
+            length_m, _, _ = self._rebuild()
         except Exception as exc:
             # Hindernis blockiert Start/Ende oder macht das Ziel unerreichbar:
             # vorigen Zustand wiederherstellen und Hindernis verwerfen.
@@ -210,7 +210,7 @@ class InteractivePlanner:
         """Erste Route berechnen, Karte zeichnen und das Fenster öffnen."""
         print("Initiale Route wird berechnet …", flush=True)
         t0 = perf_counter()
-        length_m, node_count = self._rebuild()
+        length_m, node_count, nodes_checked = self._rebuild()
         laufzeit_s = perf_counter() - t0
         self._render(status=f"Route: {length_m:.0f} m / {length_m / 1000:.3f} km")
         print("Fenster wird geöffnet …", flush=True)
@@ -221,5 +221,6 @@ class InteractivePlanner:
             "route_length_m":   length_m,
             "route_length_km":  length_m / 1000,
             "route_node_count": node_count,
+            "nodes_checked":    nodes_checked,
             "laufzeit_s":       laufzeit_s,
         }

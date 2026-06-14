@@ -266,7 +266,7 @@ def main():
     print("LÖSUNG:")
     print(f"  Algorithmus:                  {algorithmus_text}")
     print(f"  Länge:                        {laenge_text}")
-    print(f"  Knoten durchlaufen:           {route_result['route_node_count']}")
+    print(f"  Knoten geprüft:               {route_result['nodes_checked']}")
     print(f"  Laufzeit Wegsuche:            {loesungs_laufzeit_text}")
     print()
     print(f"Gesamte Laufzeit:             {gesamte_laufzeit_s:.3f} s")
