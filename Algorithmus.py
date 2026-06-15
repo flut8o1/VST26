@@ -253,7 +253,7 @@ def compute_route(grid, *, algorithm="astar"):
     Sucht den kürzesten Weg im Gitter und gibt die reine Knotenfolge zurück.
 
     Trennt die Wegsuche von der Visualisierung, sodass andere Module (z. B.
-    Hinderniss.py) die Route nach einer Graph-Änderung neu berechnen können,
+    Hindernis.py) die Route nach einer Graph-Änderung neu berechnen können,
     ohne eine Karte zu erzeugen.
 
     algorithm:

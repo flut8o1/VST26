@@ -21,7 +21,7 @@ from math import cos, radians
 from Map_Preprocessing import create_luftvo_buffer_geojson
 from Graph import create_navigation_graph as create_grid_graph
 from Algorithmus import find_path_and_visualize
-from Hinderniss import InteractivePlanner
+from Hindernis import InteractivePlanner
 
 
 # =============================================================================
@@ -78,7 +78,7 @@ WEGSUCHE_ALGORITHMUS = "astar"
 WEGSUCHE_KARTE_ANZEIGEN = True
 
 # True = interaktives Fenster öffnen: ein Linksklick fügt ein Hindernis
-# hinzu, baut den Graphen neu auf und sucht eine neue Route (Hinderniss.py).
+# hinzu, baut den Graphen neu auf und sucht eine neue Route (Hindernis.py).
 # In diesem Modus wird keine PNG-Datei geschrieben.
 INTERAKTIVE_HINDERNISSE = True
 

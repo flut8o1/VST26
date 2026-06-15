@@ -51,7 +51,7 @@ def draw_route_layers(ax, *, grid, zones, route_line, route_points, start_point,
     Alle Geometrien werden nach Web Mercator projiziert. Die Achse muss den
     gewünschten Ausschnitt (und optional den Basemap-Hintergrund) bereits
     besitzen. Wird sowohl von der PNG-Ausgabe als auch vom interaktiven
-    Fenster (Hinderniss.py) genutzt, damit die Darstellung identisch bleibt.
+    Fenster (Hindernis.py) genutzt, damit die Darstellung identisch bleibt.
 
     Ebenen (von unten nach oben):
         2. Sperrzonen – rot, transparent

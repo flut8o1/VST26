@@ -1,5 +1,5 @@
 """
-Hinderniss.py – Interaktives Hinzufügen von Hindernissen per Mausklick.
+Hindernis.py – Interaktives Hinzufügen von Hindernissen per Mausklick.
 
 Öffnet die Routenkarte als interaktives Fenster. Ein Linksklick auf die Karte
 legt an dieser Stelle eine kreisförmige Sperrzone (Standardradius 100 m) an,
