@@ -2,7 +2,7 @@
 Hindernis.py – Interaktives Hinzufügen von Hindernissen per Mausklick.
 
 Öffnet die Routenkarte als interaktives Fenster. Ein Linksklick auf die Karte
-legt an dieser Stelle eine kreisförmige Sperrzone (Standardradius 100 m) an,
+legt an dieser Stelle eine kreisförmige Sperrzone (Radius konfigurierbar über obstacle_radius_m, Standard 100 m) an,
 baut den Navigationsgraphen neu auf und sucht eine neue Route. Anschließend
 wird die Karte aktualisiert.
 

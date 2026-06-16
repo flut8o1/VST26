@@ -250,7 +250,7 @@ def _floyd_warshall(grid, neighbors, start_id, end_id):
 
 def compute_route(grid, *, algorithm="astar"):
     """
-    Sucht den kürzesten Weg im Gitter und gibt die reine Knotenfolge zurück.
+    Sucht den kürzesten Weg im Gitter und gibt Knotenfolge, Länge und Anzahl geprüfter Knoten zurück.
 
     Trennt die Wegsuche von der Visualisierung, sodass andere Module (z. B.
     Hindernis.py) die Route nach einer Graph-Änderung neu berechnen können,
@@ -320,7 +320,8 @@ def find_path_and_visualize(
         "floyd_warshall"  – Floyd-Warshall (alle Paare; nur für kleine Gitter).
 
     Rückgabe:
-        Dict mit Ergebniskennzahlen (Algorithmus, Länge, Knotenzahl, PNG-Pfad).
+        Dict mit Ergebniskennzahlen (Algorithmus, Länge, Knotenzahl,
+        geprüfte Knoten, Wegsuche-Laufzeit, PNG-Pfad).
     """
     # --- Wegsuche direkt auf der Matrix ---
 

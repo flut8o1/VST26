@@ -4,11 +4,12 @@ main.py – Einstiegspunkt der Drohnen-Routenplanung (LuftVO-konform).
 Gesamte Pipeline in drei Schritten:
     1. GeoJSON bearbeiten  – OSM-Daten klassifizieren und LuftVO-Zonen puffern.
     2. Graph erstellen     – Navigationsnetz (Gitter) aufbauen.
-    3. Wegsuche            – Kürzesten Weg mit Dijkstra oder A* finden.
+    3. Wegsuche            – Kürzesten Weg mit Dijkstra, A* oder Floyd-Warshall finden.
 
-Die Schritte reichen ihre Ergebnisse als GeoDataFrames im Speicher weiter.
-Einzige erzeugte Datei ist die Routenkarte (route_karte.png) – es werden
-keine Zwischen-GeoJSON geschrieben.
+Die Schritte reichen ihre Ergebnisse im Speicher weiter (Sperrzonen als
+GeoDataFrame, Gitter als NavigationGrid). Im nicht-interaktiven Modus ist die
+einzige erzeugte Datei die Routenkarte (route_karte.png); im interaktiven
+Modus (Standard) wird keine Datei geschrieben. Zwischen-GeoJSON entstehen nie.
 
 Alle Einstellungen befinden sich ausschließlich in den Konfigurations-
 abschnitten direkt unterhalb dieser Modulbeschreibung.
