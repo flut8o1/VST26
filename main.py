@@ -29,7 +29,7 @@ from Hindernis import InteractivePlanner
 # Eingabe / Ausgabe
 # =============================================================================
 
-INPUT_GEOJSON_NAME    = "export.geojson"
+INPUT_GEOJSON_NAME    = "export(1).geojson"
 OUTPUT_ROUTE_MAP_NAME = "route_karte.png"
 
 
